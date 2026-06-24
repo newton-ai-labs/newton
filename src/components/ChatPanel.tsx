@@ -18,8 +18,9 @@ import {
   X,
   Search as SearchIcon,
   Loader2,
+  FileEdit,
 } from 'lucide-react'
-import { useStore } from '../store'
+import { useStore, langFromPath } from '../store'
 import AgentPanel from './AgentPanel'
 
 type PanelTab = 'chat' | 'agent'
@@ -415,11 +416,29 @@ function Message({
 
 function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const [copied, setCopied] = useState(false)
-  const updateTabContent = useStore((s) => s.updateTabContent)
+  const [showApply, setShowApply] = useState(false)
+  const [targetPath, setTargetPath] = useState('')
   const activeTabId = useStore((s) => s.activeTabId)
   const tabs = useStore((s) => s.tabs)
   const toast = useStore((s) => s.toast)
-  const saveActiveTab = useStore((s) => s.saveActiveTab)
+  const applyCodeToFile = useStore((s) => s.applyCodeToFile)
+
+  // Infer the target filename from code content or active file
+  const inferPath = (): string => {
+    // Check for `// filepath:` or `# filepath:` annotation
+    const fpMatch = code.match(/^(?:\/\/|#|<!--)\s*(?:filepath|file|path)[:\s]+(.+?)\s*(?:-->|\n|$)/im)
+    if (fpMatch) return fpMatch[1].trim()
+    // Fall back to active file
+    const tab = tabs.find((t) => t.id === activeTabId)
+    if (tab) return tab.path
+    // Infer from language
+    const extMap: Record<string, string> = {
+      typescript: 'snippet.ts', javascript: 'snippet.js', python: 'snippet.py',
+      go: 'snippet.go', rust: 'snippet.rs', java: 'Snippet.java',
+      css: 'snippet.css', html: 'snippet.html', json: 'snippet.json',
+    }
+    return extMap[lang] ?? 'snippet.txt'
+  }
 
   const copy = () => {
     navigator.clipboard.writeText(code)
@@ -427,15 +446,10 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
     setTimeout(() => setCopied(false), 1500)
   }
 
-  const apply = () => {
-    const tab = tabs.find((t) => t.id === activeTabId)
-    if (!tab) {
-      toast('Open a file first to apply code')
-      return
-    }
-    updateTabContent(tab.id, code)
-    saveActiveTab()
-    toast(`Applied to ${tab.name}`)
+  const doApply = async () => {
+    const path = targetPath.trim() || inferPath()
+    await applyCodeToFile(path, code)
+    setShowApply(false)
   }
 
   return (
@@ -454,16 +468,36 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
       >
         {code}
       </SyntaxHighlighter>
-      <div className="code-actions">
-        <button className="code-action-btn" onClick={copy}>
-          {copied ? <Check size={11} /> : <Copy size={11} />}
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-        <button className="code-action-btn apply" onClick={apply}>
-          <Wand2 size={11} />
-          Apply to file
-        </button>
-      </div>
+      {showApply ? (
+        <div className="code-apply-bar">
+          <FileEdit size={11} />
+          <input
+            className="code-apply-input"
+            value={targetPath}
+            placeholder={inferPath()}
+            onChange={(e) => setTargetPath(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') doApply(); if (e.key === 'Escape') setShowApply(false) }}
+            autoFocus
+          />
+          <button className="code-action-btn apply" onClick={doApply}>
+            <Check size={11} /> Apply
+          </button>
+          <button className="code-action-btn" onClick={() => setShowApply(false)}>
+            <X size={11} />
+          </button>
+        </div>
+      ) : (
+        <div className="code-actions">
+          <button className="code-action-btn" onClick={copy}>
+            {copied ? <Check size={11} /> : <Copy size={11} />}
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+          <button className="code-action-btn apply" onClick={() => { setTargetPath(inferPath()); setShowApply(true) }}>
+            <FileEdit size={11} />
+            Apply to file
+          </button>
+        </div>
+      )}
     </div>
   )
 }

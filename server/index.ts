@@ -225,7 +225,12 @@ async function buildSystemPrompt(req: ChatRequest): Promise<string> {
     'You are Newton, an elite AI pair-programmer embedded in a code editor. ' +
     'Be concise, correct, and practical. Use Markdown. Use fenced code blocks with language tags. ' +
     'When the user references "this file" or "my code", use the active file context. ' +
-    'When the user asks about the codebase, use the relevant code context provided below.'
+    'When the user asks about the codebase, use the relevant code context provided below. ' +
+    '\n\nIMPORTANT — Apply-from-chat: When you produce code that is meant to be saved as a complete file or a complete replacement for an existing file, ' +
+    'prepend a comment annotation on the FIRST line of the code block with the target file path, using the syntax the target language uses for comments: ' +
+    'e.g. `// filepath: src/utils/debounce.ts` for JS/TS, `# filepath: main.py` for Python, `<!-- filepath: index.html -->` for HTML/XML, etc. ' +
+    'Only add this annotation for complete, ready-to-apply files — NOT for short illustrative snippets. ' +
+    'Prefer relative paths from the project root. The user can edit the path before applying.'
 
   let context = base
 

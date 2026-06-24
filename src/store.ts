@@ -82,6 +82,9 @@ interface NewtonState {
   deleteNode: (path: string) => Promise<void>
   toggleDir: (path: string) => void
 
+  // apply-from-chat: write code to a specific file (create or overwrite)
+  applyCodeToFile: (path: string, content: string) => Promise<void>
+
   setSettings: (s: Partial<Settings>) => void
   sendMessage: (text: string) => Promise<void>
   stopGeneration: () => void
@@ -451,6 +454,41 @@ export const useStore = create<NewtonState>((set, get) => ({
       get().toast(`Deleted ${path}`)
     } catch {
       get().toast('Delete failed')
+    }
+  },
+
+  applyCodeToFile: async (path, content) => {
+    const cleanPath = path.trim()
+    if (!cleanPath) {
+      get().toast('No file path')
+      return
+    }
+    try {
+      // Write to disk (creates or overwrites)
+      await fetch('/api/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: cleanPath, content }),
+      })
+      await get().refreshTree()
+      // If the file is open in a tab, update its content + mark saved
+      const existingTab = get().tabs.find((t) => t.path === cleanPath)
+      if (existingTab) {
+        set((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.id === existingTab.id
+              ? { ...t, content, savedContent: content }
+              : t,
+          ),
+          activeTabId: existingTab.id,
+        }))
+      } else {
+        // Open it in a new tab so the user sees the result
+        await get().openFile(cleanPath)
+      }
+      get().toast(`Applied → ${cleanPath}`)
+    } catch (e) {
+      get().toast(`Apply failed: ${(e as Error).message}`)
     }
   },
 

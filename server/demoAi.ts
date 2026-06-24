@@ -25,10 +25,11 @@ interface DemoContext {
 const codeFence = (lang: string, code: string) =>
   '```' + lang + '\n' + code.trim() + '\n```'
 
-const TEMPLATES: { match: RegExp; lang: string; body: (ctx: DemoContext) => string }[] = [
+const TEMPLATES: { match: RegExp; lang: string; filepath: string; body: (ctx: DemoContext) => string }[] = [
   {
     match: /\bdebounce\b/i,
     lang: 'ts',
+    filepath: 'src/utils/debounce.ts',
     body: () =>
       `export function debounce<T extends (...args: any[]) => void>(fn: T, ms = 300) {
   let timer: ReturnType<typeof setTimeout>
@@ -41,6 +42,7 @@ const TEMPLATES: { match: RegExp; lang: string; body: (ctx: DemoContext) => stri
   {
     match: /\bthrottle\b/i,
     lang: 'ts',
+    filepath: 'src/utils/throttle.ts',
     body: () =>
       `export function throttle<T extends (...args: any[]) => void>(fn: T, ms = 300) {
   let last = 0
@@ -56,6 +58,7 @@ const TEMPLATES: { match: RegExp; lang: string; body: (ctx: DemoContext) => stri
   {
     match: /\b(usestate|react state hook)\b/i,
     lang: 'tsx',
+    filepath: 'src/components/Counter.tsx',
     body: () =>
       `import { useState } from 'react'
 
@@ -71,6 +74,7 @@ export function Counter() {
   {
     match: /\b(fetch|http get|api request)\b/i,
     lang: 'ts',
+    filepath: 'src/utils/getJSON.ts',
     body: () =>
       `export async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { Accept: 'application/json' } })
@@ -81,6 +85,7 @@ export function Counter() {
   {
     match: /\bexpress\s+(server|route|api)\b/i,
     lang: 'ts',
+    filepath: 'server.ts',
     body: () =>
       `import express from 'express'
 const app = express()
@@ -95,6 +100,7 @@ app.listen(3000, () => console.log('listening on :3000'))`,
   {
     match: /\b(quicksort|quick sort)\b/i,
     lang: 'ts',
+    filepath: 'src/sorting/quicksort.ts',
     body: () =>
       `export function quicksort(arr: number[]): number[] {
   if (arr.length <= 1) return arr
@@ -105,6 +111,16 @@ app.listen(3000, () => console.log('listening on :3000'))`,
 }`,
   },
 ]
+
+/** Build a code fence with an optional filepath annotation for apply-from-chat. */
+function codeFenceWithFile(lang: string, filepath: string, code: string): string {
+  // Pick a comment prefix based on language
+  const comment = lang === 'python' ? '#' : lang === 'html' || lang === 'xml' ? '<!-- -->' : '//'
+  const annotation = comment === '<!-- -->'
+    ? `<!-- filepath: ${filepath} -->`
+    : `${comment} filepath: ${filepath}`
+  return '```' + lang + '\n' + annotation + '\n' + code.trim() + '\n```'
+}
 
 const KB: { match: RegExp; answer: string }[] = [
   {
@@ -138,7 +154,7 @@ const RULES: Rule[] = [
     match: (q) => TEMPLATES.some((t) => t.match.test(q)),
     respond: (ctx) => {
       const tpl = TEMPLATES.find((t) => t.match.test(ctx.question))!
-      return `Here's a clean implementation:\n\n${codeFence(tpl.lang, tpl.body(ctx))}\n\nLet me know if you'd like a variant (with tests, in a different language, or hooked into your existing code).`
+      return `Here's a clean implementation — click **Apply** to save it as a file:\n\n${codeFenceWithFile(tpl.lang, tpl.filepath, tpl.body(ctx))}\n\nLet me know if you'd like a variant (with tests, in a different language, or hooked into your existing code).`
     },
   },
   {

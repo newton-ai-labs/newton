@@ -854,6 +854,36 @@ select {
   border-color: var(--accent-2);
 }
 
+/* ---- apply-from-chat bar ---- */
+.code-apply-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+}
+.code-apply-bar > svg {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.code-apply-input {
+  flex: 1;
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  outline: none;
+}
+.code-apply-input:focus {
+  border-color: var(--accent-2);
+}
+
 /* ============ STATUS BAR ============ */
 .status-bar {
   height: 26px;
