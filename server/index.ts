@@ -220,6 +220,108 @@ app.post('/api/index/rebuild', async (_req, res) => {
   }
 })
 
+// ---------- literal / regex grep across workspace ----------
+interface GrepResult {
+  filePath: string
+  line: number
+  column: number
+  preview: string
+  matchLength: number
+}
+
+app.get('/api/grep', async (req, res) => {
+  try {
+    const patternStr = String(req.query.pattern ?? '')
+    const caseSensitive = req.query.caseSensitive === 'true'
+    const useRegex = req.query.regex === 'true'
+    const wholeWord = req.query.wholeWord === 'true'
+    const limit = Math.min(Number(req.query.limit) || 500, 2000)
+
+    if (!patternStr.trim()) return res.json({ results: [] })
+
+    // Build regex
+    const flags = caseSensitive ? 'g' : 'gi'
+    let pattern: RegExp
+    try {
+      const src = useRegex
+        ? patternStr
+        : wholeWord
+          ? `\\b${patternStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`
+          : patternStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      pattern = new RegExp(src, flags)
+    } catch (e) {
+      return res.status(400).json({ error: `Invalid regex: ${(e as Error).message}` })
+    }
+
+    const results: GrepResult[] = []
+    await walkAndGrep(WORKSPACE, '', pattern, results, limit)
+
+    res.json({ results, truncated: results.length >= limit })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Recursively walk the workspace, reading files and running the pattern. */
+async function walkAndGrep(
+  absDir: string,
+  relDir: string,
+  pattern: RegExp,
+  results: GrepResult[],
+  limit: number,
+): Promise<void> {
+  if (results.length >= limit) return
+  const entries = await fs.readdir(absDir, { withFileTypes: true })
+  for (const entry of entries) {
+    if (results.length >= limit) return
+    if (IGNORED.has(entry.name)) continue
+    const childRel = relDir ? `${relDir}/${entry.name}` : entry.name
+    const childAbs = path.join(absDir, entry.name)
+    if (entry.isDirectory()) {
+      await walkAndGrep(childAbs, childRel, pattern, results, limit)
+    } else if (entry.isFile()) {
+      // Skip binary/large files
+      if (isSkippableFile(entry.name)) continue
+      try {
+        const content = await fs.readFile(childAbs, 'utf8')
+        const lines = content.split('\n')
+        for (let i = 0; i < lines.length; i++) {
+          if (results.length >= limit) return
+          pattern.lastIndex = 0
+          const m = pattern.exec(lines[i])
+          if (m) {
+            results.push({
+              filePath: childRel,
+              line: i + 1,
+              column: m.index + 1,
+              preview: lines[i].slice(0, 300),
+              matchLength: m[0].length,
+            })
+          }
+        }
+      } catch {
+        /* skip unreadable files */
+      }
+    }
+  }
+}
+
+function isSkippableFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() ?? ''
+  // Skip images, fonts, archives, binaries
+  const binaryExts = new Set([
+    'png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'webp', 'bmp', 'tiff',
+    'woff', 'woff2', 'ttf', 'otf', 'eot',
+    'zip', 'gz', 'tar', 'rar', '7z', 'bz2',
+    'pdf', 'doc', 'docx', 'xls', 'xlsx',
+    'mp3', 'mp4', 'avi', 'mov', 'wav', 'flv',
+    'exe', 'dll', 'so', 'dylib', 'bin',
+    'lock', 'map',
+  ])
+  // Skip files > 1MB (rough heuristic)
+  return binaryExts.has(ext)
+}
+
 // ---------- chat / AI proxy (streaming) ----------
 async function buildSystemPrompt(req: ChatRequest): Promise<string> {
   const base =
