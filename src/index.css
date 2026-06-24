@@ -367,6 +367,48 @@ select {
   position: relative;
 }
 
+/* ============ BREADCRUMB ============ */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 5px 16px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.breadcrumb::-webkit-scrollbar {
+  display: none;
+}
+.bc-seg-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+.bc-sep {
+  color: var(--text-faint);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+.bc-seg {
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.12s;
+}
+.bc-seg:hover {
+  background: var(--panel-2);
+  color: var(--text-dim);
+}
+.bc-last {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
 /* ============ EMPTY STATE ============ */
 .empty-state {
   display: flex;

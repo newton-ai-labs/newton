@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import Editor, { type OnMount, type BeforeMount } from '@monaco-editor/react'
 import type { editor } from 'monaco-editor'
 import type * as MonacoNs from 'monaco-editor'
-import { X, Sparkles } from 'lucide-react'
+import { X, Sparkles, ChevronRight } from 'lucide-react'
 import { useStore, type EditorTab } from '../store'
 import { fileIcon, fileColor } from './fileIcons'
 import InlineEditWidget from './InlineEditWidget'
 import { registerCopilot } from '../ghostCompletions'
+import { setupCodeLens, type CodeLensAction, type DetectedSymbol } from '../codeLens'
 
 export default function EditorArea() {
   const tabs = useStore((s) => s.tabs)
@@ -19,7 +20,6 @@ export default function EditorArea() {
   const setSettingsOpen = useStore((s) => s.setSettingsOpen)
 
   const active = tabs.find((t) => t.id === activeTabId) ?? null
-
   if (!active) {
     return (
       <div className="editor-area">
@@ -57,6 +57,7 @@ export default function EditorArea() {
           />
         ))}
       </div>
+      <Breadcrumb path={active.path} />
       <div className="editor-host">
         <CodeView
           key={active.id}
@@ -66,6 +67,20 @@ export default function EditorArea() {
           fontSize={settings.fontSize}
         />
       </div>
+    </div>
+  )
+}
+
+function Breadcrumb({ path }: { path: string }) {
+  const parts = path.split('/')
+  return (
+    <div className="breadcrumb">
+      {parts.map((p, i) => (
+        <span key={i} className="bc-seg-wrap">
+          {i > 0 && <ChevronRight size={11} className="bc-sep" />}
+          <span className={`bc-seg ${i === parts.length - 1 ? 'bc-last' : ''}`}>{p}</span>
+        </span>
+      ))}
     </div>
   )
 }
@@ -112,6 +127,8 @@ function CodeView({
   onSave: () => void
   fontSize: number
 }) {
+  const sendMessage = useStore((s) => s.sendMessage)
+  const setChatVisible = useStore((s) => s.setChatVisible)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const [editorInst, setEditorInst] = useState<editor.IStandaloneCodeEditor | null>(null)
   const [monacoInst, setMonacoInst] = useState<typeof MonacoNs | null>(null)
@@ -177,6 +194,23 @@ function CodeView({
     const copilotDispose = copilot
     ;(ed as unknown as { _copilotDispose?: () => void })._copilotDispose =
       copilotDispose.dispose
+
+    // Code Lens: ✨ Explain · ♻️ Refactor · 🧪 Tests above each symbol
+    const handleLensAction = (action: CodeLensAction, sym: DetectedSymbol, code: string) => {
+      setChatVisible(true)
+      const label = `${sym.kind} \`${sym.name}\` (lines ${sym.startLine}–${sym.endLine})`
+      let prompt = ''
+      if (action === 'explain') {
+        prompt = `Explain the following ${label}:\n\n\`\`\`${tab.language}\n${code}\n\`\`\``
+      } else if (action === 'refactor') {
+        prompt = `Refactor the following ${label} for readability and best practices. Show the refactored code and briefly explain what you changed and why:\n\n\`\`\`${tab.language}\n${code}\n\`\`\``
+      } else {
+        prompt = `Write thorough unit tests for the following ${label}. Use an appropriate testing framework for ${tab.language}:\n\n\`\`\`${tab.language}\n${code}\n\`\`\``
+      }
+      void sendMessage(prompt)
+    }
+    const lensDispose = setupCodeLens(ed, monaco, handleLensAction)
+    ;(ed as unknown as { _lensDispose?: () => void })._lensDispose = lensDispose.dispose
   }
 
   // keep settings font in sync

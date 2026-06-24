@@ -3,7 +3,7 @@
   "graph": {
     "version": 1,
     "root": "/Users/jessiehermosillo/BetterThanCursor",
-    "builtAt": "2026-06-24T15:59:39.949Z",
+    "builtAt": "2026-06-24T16:58:18.944Z",
     "nodes": {
       "server/agent.ts": {
         "id": "server/agent.ts",
@@ -401,31 +401,31 @@
         "id": "server/index.ts",
         "path": "server/index.ts",
         "language": "typescript",
-        "lineCount": 1595,
+        "lineCount": 1548,
         "symbols": [
           {
             "name": "resolveWorkspace",
             "kind": "function",
             "exported": false,
-            "line": 41
+            "line": 42
           },
           {
             "name": "safeJoin",
             "kind": "function",
             "exported": false,
-            "line": 54
+            "line": 55
           },
           {
             "name": "buildTree",
             "kind": "function",
             "exported": false,
-            "line": 82
+            "line": 83
           },
           {
             "name": "buildSystemPrompt",
             "kind": "function",
             "exported": false,
-            "line": 223
+            "line": 224
           },
           {
             "name": "fallbackNoKey",
@@ -434,82 +434,88 @@
             "line": 345
           },
           {
-            "name": "streamOpenai",
+            "name": "streamOpenAiCompat",
             "kind": "function",
             "exported": false,
-            "line": 357
+            "line": 358
           },
           {
             "name": "streamAnthropic",
             "kind": "function",
             "exported": false,
-            "line": 396
+            "line": 404
           },
           {
             "name": "streamOllama",
             "kind": "function",
             "exported": false,
-            "line": 436
+            "line": 444
           },
           {
             "name": "readSSE",
             "kind": "function",
             "exported": false,
-            "line": 470
+            "line": 478
           },
           {
             "name": "llmComplete",
             "kind": "function",
             "exported": false,
-            "line": 560
+            "line": 536
+          },
+          {
+            "name": "demoComposer",
+            "kind": "function",
+            "exported": false,
+            "line": 685
           },
           {
             "name": "demoNlsh",
             "kind": "function",
             "exported": false,
-            "line": 731
+            "line": 772
           },
           {
             "name": "demoTests",
             "kind": "function",
             "exported": false,
-            "line": 842
+            "line": 864
           },
           {
             "name": "GitFileChange",
             "kind": "interface",
             "exported": false,
-            "line": 877
+            "line": 899
           },
           {
             "name": "GitStatus",
             "kind": "interface",
             "exported": false,
-            "line": 887
+            "line": 909
           },
           {
             "name": "git",
             "kind": "function",
             "exported": false,
-            "line": 900
+            "line": 922
           },
           {
             "name": "demoCommitMessage",
             "kind": "function",
             "exported": false,
-            "line": 1242
+            "line": 1213
           },
           {
             "name": "demoExplainDiff",
             "kind": "function",
             "exported": false,
-            "line": 1270
+            "line": 1241
           },
           {
             "name": "demoCodeReview",
             "kind": "function",
             "exported": false,
-            "line": 1299
+            "line": 1270
           }
         ],
         "rawImports": [
@@ -971,199 +977,265 @@
         "id": "shared/types.ts",
         "path": "shared/types.ts",
         "language": "typescript",
-        "lineCount": 304,
+        "lineCount": 566,
         "symbols": [
+          {
+            "name": "ProviderProtocol",
+            "kind": "type",
+            "exported": true,
+            "line": 4
+          },
           {
             "name": "Provider",
             "kind": "type",
             "exported": true,
-            "line": 3
+            "line": 6
+          },
+          {
+            "name": "ProviderDef",
+            "kind": "interface",
+            "exported": true,
+            "line": 20
+          },
+          {
+            "name": "PROVIDER_REGISTRY",
+            "kind": "const",
+            "exported": true,
+            "line": 40
+          },
+          {
+            "name": "PROVIDER_MAP",
+            "kind": "const",
+            "exported": true,
+            "line": 200
+          },
+          {
+            "name": "getProviderDef",
+            "kind": "function",
+            "exported": true,
+            "line": 204
+          },
+          {
+            "name": "getProtocol",
+            "kind": "function",
+            "exported": true,
+            "line": 209
           },
           {
             "name": "ChatMessage",
             "kind": "interface",
             "exported": true,
-            "line": 5
+            "line": 213
           },
           {
             "name": "FileNode",
             "kind": "interface",
             "exported": true,
-            "line": 10
+            "line": 218
           },
           {
             "name": "ProviderConfig",
             "kind": "interface",
             "exported": true,
-            "line": 17
+            "line": 225
           },
           {
             "name": "ChatRequest",
             "kind": "interface",
             "exported": true,
-            "line": 24
+            "line": 232
           },
           {
             "name": "EditRequest",
             "kind": "interface",
             "exported": true,
-            "line": 34
+            "line": 242
           },
           {
             "name": "EditResponse",
             "kind": "interface",
             "exported": true,
-            "line": 47
+            "line": 255
           },
           {
             "name": "AgentStep",
             "kind": "interface",
             "exported": true,
-            "line": 53
+            "line": 261
           },
           {
             "name": "AgentPlan",
             "kind": "interface",
             "exported": true,
-            "line": 66
+            "line": 274
           },
           {
             "name": "AgentRequest",
             "kind": "interface",
             "exported": true,
-            "line": 71
+            "line": 279
+          },
+          {
+            "name": "PerProviderSettings",
+            "kind": "interface",
+            "exported": true,
+            "line": 288
           },
           {
             "name": "Settings",
             "kind": "interface",
             "exported": true,
-            "line": 79
+            "line": 294
+          },
+          {
+            "name": "buildDefaultProviderConfigs",
+            "kind": "function",
+            "exported": false,
+            "line": 304
           },
           {
             "name": "DEFAULT_SETTINGS",
             "kind": "const",
             "exported": true,
-            "line": 93
+            "line": 317
+          },
+          {
+            "name": "migrateSettings",
+            "kind": "function",
+            "exported": true,
+            "line": 330
+          },
+          {
+            "name": "ComposerRequest",
+            "kind": "interface",
+            "exported": true,
+            "line": 356
+          },
+          {
+            "name": "ComposerFileChange",
+            "kind": "interface",
+            "exported": true,
+            "line": 364
+          },
+          {
+            "name": "ComposerResponse",
+            "kind": "interface",
+            "exported": true,
+            "line": 375
           },
           {
             "name": "CommitSuggestionRequest",
             "kind": "interface",
             "exported": true,
-            "line": 110
+            "line": 382
           },
           {
             "name": "ExplainDiffRequest",
             "kind": "interface",
             "exported": true,
-            "line": 116
+            "line": 388
           },
           {
             "name": "CodeReviewFinding",
             "kind": "interface",
             "exported": true,
-            "line": 124
+            "line": 396
           },
           {
             "name": "CodeReviewRequest",
             "kind": "interface",
             "exported": true,
-            "line": 132
+            "line": 404
           },
           {
             "name": "CodeReviewResponse",
             "kind": "interface",
             "exported": true,
-            "line": 140
-          },
-          {
-            "name": "PROVIDER_MODELS",
-            "kind": "const",
-            "exported": true,
-            "line": 146
+            "line": 412
           },
           {
             "name": "RiskLevel",
             "kind": "type",
             "exported": true,
-            "line": 162
+            "line": 424
           },
           {
             "name": "Reversibility",
             "kind": "type",
             "exported": true,
-            "line": 163
+            "line": 425
           },
           {
             "name": "ConsequenceFlag",
             "kind": "interface",
             "exported": true,
-            "line": 165
+            "line": 427
           },
           {
             "name": "StepAssessment",
             "kind": "interface",
             "exported": true,
-            "line": 175
+            "line": 437
           },
           {
             "name": "ConsequenceReport",
             "kind": "interface",
             "exported": true,
-            "line": 189
+            "line": 451
           },
           {
             "name": "MissionStatus",
             "kind": "type",
             "exported": true,
-            "line": 209
+            "line": 471
           },
           {
             "name": "MissionPhase",
             "kind": "type",
             "exported": true,
-            "line": 210
+            "line": 472
           },
           {
             "name": "MissionOutcome",
             "kind": "interface",
             "exported": true,
-            "line": 212
+            "line": 474
           },
           {
             "name": "MissionStep",
             "kind": "interface",
             "exported": true,
-            "line": 224
+            "line": 486
           },
           {
             "name": "Mission",
             "kind": "interface",
             "exported": true,
-            "line": 235
+            "line": 497
           },
           {
             "name": "TechStackEntry",
             "kind": "interface",
             "exported": true,
-            "line": 259
+            "line": 521
           },
           {
             "name": "MemoryEntryType",
             "kind": "type",
             "exported": true,
-            "line": 270
+            "line": 532
           },
           {
             "name": "MemoryEntry",
             "kind": "interface",
             "exported": true,
-            "line": 272
+            "line": 534
           },
           {
             "name": "WorkspaceMemory",
             "kind": "interface",
             "exported": true,
-            "line": 281
+            "line": 543
           }
         ],
         "rawImports": [],
@@ -1174,19 +1246,19 @@
         "id": "src/App.tsx",
         "path": "src/App.tsx",
         "language": "typescript",
-        "lineCount": 438,
+        "lineCount": 561,
         "symbols": [
           {
             "name": "App",
             "kind": "function",
             "exported": true,
-            "line": 33
+            "line": 34
           },
           {
             "name": "SearchView",
             "kind": "function",
             "exported": false,
-            "line": 380
+            "line": 387
           }
         ],
         "rawImports": [
@@ -1204,7 +1276,8 @@
           "./components/SourceControlPanel",
           "./components/GraphPanel",
           "./components/MemoryPanel",
-          "./components/MissionPanel"
+          "./components/MissionPanel",
+          "./components/Composer"
         ],
         "imports": [
           "src/store.ts",
@@ -1218,7 +1291,8 @@
           "src/components/SourceControlPanel.tsx",
           "src/components/GraphPanel.tsx",
           "src/components/MemoryPanel.tsx",
-          "src/components/MissionPanel.tsx"
+          "src/components/MissionPanel.tsx",
+          "src/components/Composer.tsx"
         ],
         "externalDeps": [
           "react",
@@ -1230,7 +1304,7 @@
         "id": "src/components/AgentPanel.tsx",
         "path": "src/components/AgentPanel.tsx",
         "language": "typescript",
-        "lineCount": 437,
+        "lineCount": 423,
         "symbols": [
           {
             "name": "AgentPanel",
@@ -1242,25 +1316,25 @@
             "name": "StepIcon",
             "kind": "function",
             "exported": false,
-            "line": 334
+            "line": 320
           },
           {
             "name": "StatusBadge",
             "kind": "function",
             "exported": false,
-            "line": 341
+            "line": 327
           },
           {
             "name": "riskColor",
             "kind": "function",
             "exported": false,
-            "line": 349
+            "line": 335
           },
           {
             "name": "ConsequenceBanner",
             "kind": "function",
             "exported": false,
-            "line": 359
+            "line": 345
           }
         ],
         "rawImports": [
@@ -1329,19 +1403,53 @@
         "id": "src/components/CommandPalette.tsx",
         "path": "src/components/CommandPalette.tsx",
         "language": "typescript",
-        "lineCount": 197,
+        "lineCount": 207,
         "symbols": [
           {
             "name": "Cmd",
             "kind": "interface",
             "exported": false,
-            "line": 15
+            "line": 16
           },
           {
             "name": "CommandPalette",
             "kind": "function",
             "exported": true,
-            "line": 24
+            "line": 25
+          }
+        ],
+        "rawImports": [
+          "react",
+          "lucide-react",
+          "../store",
+          "../../shared/types"
+        ],
+        "imports": [
+          "src/store.ts",
+          "shared/types.ts"
+        ],
+        "externalDeps": [
+          "react",
+          "lucide-react"
+        ]
+      },
+      "src/components/Composer.tsx": {
+        "id": "src/components/Composer.tsx",
+        "path": "src/components/Composer.tsx",
+        "language": "typescript",
+        "lineCount": 501,
+        "symbols": [
+          {
+            "name": "PendingFile",
+            "kind": "interface",
+            "exported": false,
+            "line": 6
+          },
+          {
+            "name": "Composer",
+            "kind": "function",
+            "exported": true,
+            "line": 11
           }
         ],
         "rawImports": [
@@ -1626,13 +1734,13 @@
         "id": "src/components/SettingsModal.tsx",
         "path": "src/components/SettingsModal.tsx",
         "language": "typescript",
-        "lineCount": 252,
+        "lineCount": 202,
         "symbols": [
           {
             "name": "SettingsModal",
             "kind": "function",
             "exported": true,
-            "line": 56
+            "line": 11
           }
         ],
         "rawImports": [
@@ -1894,97 +2002,97 @@
         "id": "src/store.ts",
         "path": "src/store.ts",
         "language": "typescript",
-        "lineCount": 1246,
+        "lineCount": 1243,
         "symbols": [
           {
             "name": "EditorTab",
             "kind": "interface",
             "exported": true,
-            "line": 15
+            "line": 16
           },
           {
             "name": "ChatMsg",
             "kind": "interface",
             "exported": true,
-            "line": 24
+            "line": 25
           },
           {
             "name": "Toast",
             "kind": "interface",
             "exported": false,
-            "line": 29
+            "line": 30
           },
           {
             "name": "NewtonState",
             "kind": "interface",
             "exported": false,
-            "line": 34
+            "line": 35
           },
           {
             "name": "SearchHit",
             "kind": "interface",
             "exported": true,
-            "line": 183
+            "line": 188
           },
           {
             "name": "AttachedFile",
             "kind": "interface",
             "exported": true,
-            "line": 194
+            "line": 199
           },
           {
             "name": "RepoGraphData",
             "kind": "interface",
             "exported": true,
-            "line": 200
+            "line": 205
           },
           {
             "name": "GitFileChange",
             "kind": "interface",
             "exported": true,
-            "line": 218
+            "line": 223
           },
           {
             "name": "GitStatusData",
             "kind": "interface",
             "exported": true,
-            "line": 225
+            "line": 230
           },
           {
             "name": "langFromPath",
             "kind": "function",
             "exported": true,
-            "line": 235
+            "line": 240
           },
           {
             "name": "guessTestPath",
             "kind": "function",
             "exported": false,
-            "line": 274
+            "line": 279
           },
           {
             "name": "providerConfig",
             "kind": "function",
             "exported": false,
-            "line": 282
+            "line": 291
           },
           {
             "name": "useStore",
             "kind": "variable",
             "exported": true,
-            "line": 311
+            "line": 305
           },
           {
             "name": "loadSettings",
             "kind": "function",
             "exported": false,
-            "line": 1231
+            "line": 1228
           },
           {
             "name": "saveSettings",
             "kind": "function",
             "exported": false,
-            "line": 1240
+            "line": 1237
           }
         ],
         "rawImports": [
@@ -2140,6 +2248,11 @@
         "symbols": []
       },
       {
+        "source": "src/App.tsx",
+        "target": "src/components/Composer.tsx",
+        "symbols": []
+      },
+      {
         "source": "src/components/AgentPanel.tsx",
         "target": "src/store.ts",
         "symbols": []
@@ -2166,6 +2279,16 @@
       },
       {
         "source": "src/components/CommandPalette.tsx",
+        "target": "shared/types.ts",
+        "symbols": []
+      },
+      {
+        "source": "src/components/Composer.tsx",
+        "target": "src/store.ts",
+        "symbols": []
+      },
+      {
+        "source": "src/components/Composer.tsx",
         "target": "shared/types.ts",
         "symbols": []
       },
@@ -2276,6 +2399,7 @@
         "src/components/AgentPanel.tsx",
         "src/components/ChatPanel.tsx",
         "src/components/CommandPalette.tsx",
+        "src/components/Composer.tsx",
         "src/components/EditorArea.tsx",
         "src/components/FileExplorer.tsx",
         "src/components/GraphPanel.tsx",
@@ -2320,9 +2444,13 @@
       "src/components/MissionPanel.tsx": [
         "src/App.tsx"
       ],
+      "src/components/Composer.tsx": [
+        "src/App.tsx"
+      ],
       "shared/types.ts": [
         "src/components/AgentPanel.tsx",
         "src/components/CommandPalette.tsx",
+        "src/components/Composer.tsx",
         "src/components/FileExplorer.tsx",
         "src/components/MemoryPanel.tsx",
         "src/components/MissionPanel.tsx",
@@ -2347,12 +2475,12 @@
       ]
     },
     "stats": {
-      "fileCount": 32,
-      "symbolCount": 233,
-      "edgeCount": 38,
+      "fileCount": 33,
+      "symbolCount": 247,
+      "edgeCount": 41,
       "externalDepCount": 25,
       "languages": {
-        "typescript": 31,
+        "typescript": 32,
         "javascript": 1
       }
     }
@@ -2360,27 +2488,27 @@
   "mtimes": {
     "server/agent.ts": 1782303086249.7732,
     "server/demoAi.ts": 1782316770405.3591,
-    "server/index.ts": 1782316152165.6978,
+    "server/index.ts": 1782319700221.4194,
     "server/indexing.ts": 1782308216498.0393,
     "server/memory.ts": 1782312042983.5276,
     "server/repoGraph.ts": 1782311634477.6956,
-    "shared/types.ts": 1782312856409.4438,
-    "src/App.tsx": 1782314271506.4272,
-    "src/components/AgentPanel.tsx": 1782313162598.5464,
+    "shared/types.ts": 1782319669908.572,
+    "src/App.tsx": 1782319826827.0962,
+    "src/components/AgentPanel.tsx": 1782318506467.9978,
     "src/components/ChatPanel.tsx": 1782316109241.3164,
-    "src/components/CommandPalette.tsx": 1782301171134.1099,
+    "src/components/CommandPalette.tsx": 1782319861556.1123,
     "src/components/EditorArea.tsx": 1782302876326.7422,
     "src/components/FileExplorer.tsx": 1782300996400.9326,
     "src/components/GraphPanel.tsx": 1782311858641.1914,
     "src/components/InlineEditWidget.tsx": 1782302533945.3918,
-    "src/components/SettingsModal.tsx": 1782301142841.938,
+    "src/components/SettingsModal.tsx": 1782318472452.2976,
     "src/components/SourceControlPanel.tsx": 1782311285289.8787,
     "src/components/TerminalPanel.tsx": 1782304384173.4229,
     "src/components/VoicePanel.tsx": 1782304422386.5344,
     "src/components/fileIcons.tsx": 1782301435550.8054,
     "src/ghostCompletions.ts": 1782302830151.2844,
     "src/main.tsx": 1782300922019.6328,
-    "src/store.ts": 1782316038718.4146,
+    "src/store.ts": 1782319901713.3252,
     "src/vite-env.d.ts": 1782303399107.9153,
     "vite.config.d.ts": 1782301485334.896,
     "vite.config.js": 1782301485322.439,
@@ -2389,6 +2517,7 @@
     "server/consequence.ts": 1782313060172.0427,
     "server/mission.ts": 1782313071767.0898,
     "src/components/MissionPanel.tsx": 1782314238801.7139,
-    "src/utils/debounce.ts": 1782316553793.936
+    "src/utils/debounce.ts": 1782316553793.936,
+    "src/components/Composer.tsx": 1782319793678.5176
   }
 }
