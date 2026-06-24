@@ -45,7 +45,6 @@ curl http://localhost:8787/api/health
 
 ```
 newton/
-├── client/                 # (not used — frontend lives in src/)
 ├── docs/                   # 📚 You are here
 │   ├── ARCHITECTURE.md
 │   ├── API.md
@@ -56,7 +55,7 @@ newton/
 │   ├── demoAi.ts           # Built-in demo AI
 │   └── indexing.ts         # TF-IDF codebase indexer
 ├── shared/                 # Shared TypeScript types
-│   └── types.ts
+│   └── types.ts            # Types + PROVIDER_REGISTRY (table-driven provider defs)
 ├── src/                    # React frontend
 │   ├── components/         # UI components
 │   ├── store.ts            # Zustand state
@@ -82,10 +81,12 @@ Newton doesn't have a formal test suite yet (contributions welcome!), but here's
 6. **Command palette (⌘P):** Should fuzzy-find files
 
 ### Provider Tests
-If you have API keys, test in Settings:
-- OpenAI (GPT-4o-mini)
-- Anthropic (Claude 3.5 Sonnet)
-- Ollama (local)
+Newton supports 10 providers. Test any you have access to in Settings:
+- **Cloud:** OpenAI, Anthropic, Google Gemini, Groq, Mistral, Together, DeepSeek
+- **Local:** Ollama (`ollama serve`), LocalAI
+- **Demo:** Always available, no key needed
+
+> **Adding a provider** is now table-driven: just add an entry to `PROVIDER_REGISTRY` in `shared/types.ts`. If the provider uses an existing protocol (`openai`, `anthropic`, `google`, `ollama`), no server code changes are needed.
 
 ---
 

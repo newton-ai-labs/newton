@@ -26,8 +26,10 @@ Newton is a full-stack AI-native code editor. The frontend is a React SPA; the b
 │         │                │                   │          │
 │         │           ┌────┴────┐              │          │
 │         │           ▼         ▼              │          │
-│         │     OpenAI   Anthropic             │          │
-│         │     /Ollama  /Demo AI              │          │
+│         │   10 providers via registry        │          │
+│         │   (OpenAI/Anthropic/Gemini/Groq    │          │
+│         │    /Mistral/Together/DeepSeek      │          │
+│         │    /Ollama/LocalAI/Demo)           │          │
 └─────────┴───────────────────────────────────┴──────────┘
 ```
 
@@ -51,7 +53,7 @@ Newton is a full-stack AI-native code editor. The frontend is a React SPA; the b
 | `ChatPanel.tsx` | Streaming AI chat with @-mentions, context chips, code-block apply |
 | `AgentPanel.tsx` | Agent mode: plan steps, show diffs, accept/reject per step, consequence-gated |
 | `CommandPalette.tsx` | ⌘P fuzzy file find + commands |
-| `SettingsModal.tsx` | Provider config (OpenAI/Anthropic/Ollama), model selection |
+| `SettingsModal.tsx` | Provider config (registry-driven: 10 providers), model/key/baseUrl per provider |
 | `InlineEditWidget.tsx` | ⌘K inline edit overlay with diff review |
 | `TerminalPanel.tsx` | Integrated terminal + NL→shell translation |
 | `VoicePanel.tsx` | Voice coding overlay (Web Speech API) |
@@ -69,7 +71,7 @@ All state flows through a single Zustand store (`store.ts`). Key slices:
 - **Chat state:** `messages`, `streaming`, `attachedFiles` (from @-mentions)
 - **Agent state:** `agentPlan`, `agentSteps`, `agentRunning`
 - **UI state:** `sidebarVisible`, `chatVisible`, `paletteOpen`, `settingsOpen`
-- **Settings:** `provider`, `apiKey`, `model`, `baseUrl`
+- **Settings:** `provider` (one of `demo`/`openai`/`anthropic`/`gemini`/`groq`/`mistral`/`together`/`deepseek`/`ollama`/`localai`), `providerConfigs` (per-provider `{ model, apiKey, baseUrl }`), `systemPrompt`, `fontSize`
 
 ---
 
@@ -93,22 +95,37 @@ All state flows through a single Zustand store (`store.ts`). Key slices:
 3. Server (`index.ts:238`):
    - Runs `getContextForQuery()` against the TF-IDF index to find relevant code
    - Builds a system prompt including: retrieved context + attached files + active file
-   - Routes to the AI provider (OpenAI/Anthropic/Ollama/Demo)
+   - Routes to the AI provider via the registry-driven router (10 providers, protocol-dispatched)
    - Streams the response back via **Server-Sent Events (SSE)**
 4. Frontend reads the SSE stream and appends tokens to the chat bubble in real-time
 
 ### AI Provider Router
 
-The server abstracts providers behind a common interface:
+The server abstracts providers behind a common interface. Providers are **table-driven** via `PROVIDER_REGISTRY` in `shared/types.ts` — each entry declares its protocol, default models, and capabilities (needs key? needs base URL?). The server's `llmComplete()` dispatches by protocol:
 
 ```
-provider ∈ { 'demo', 'openai', 'anthropic', 'ollama' }
+provider ∈ {
+  'demo',                          // built-in simulated AI
+  'openai',                        // protocol: 'openai'
+  'anthropic',                     // protocol: 'anthropic'
+  'gemini',                        // protocol: 'google'
+  'groq',                          // protocol: 'openai'
+  'mistral',                       // protocol: 'openai'
+  'together',                      // protocol: 'openai'
+  'deepseek',                      // protocol: 'openai'
+  'ollama',                        // protocol: 'ollama'
+  'localai'                        // protocol: 'openai'
+}
 ```
 
-- **Demo:** Returns simulated, helpful responses using `demoAi.ts` — no network calls
-- **OpenAI:** Streaming chat completions via `OPENAI_BASE_URL` (supports Azure/proxies)
-- **Anthropic:** Streaming via Claude Messages API
-- **Ollama:** Local streaming via Ollama's API
+**Protocols:**
+- **`openai`** — Streaming chat completions (`POST /v1/chat/completions`). Used by OpenAI, Groq, Mistral, Together, DeepSeek, LocalAI, and any OpenAI-compatible endpoint. Supports custom base URL.
+- **`anthropic`** — Streaming via Claude Messages API (`POST /v1/messages`).
+- **`google`** — Streaming via Gemini API (`streamGenerateContent`).
+- **`ollama`** — Local streaming via Ollama's API (`/api/chat`).
+- **`demo`** — Returns simulated, helpful responses using `demoAi.ts` — no network calls.
+
+**Adding a provider** is a single entry in `PROVIDER_REGISTRY` — no server code changes needed if the protocol already exists.
 
 All providers stream via SSE for a responsive UX.
 

@@ -2,7 +2,7 @@
 
 **Newton** is a polished, AI-native code editor that runs in your browser — a genuine Cursor alternative built from scratch. It bundles a full Monaco editor, multi-provider LLM assistant, autonomous agent mode, Copilot-style autocomplete, inline AI edits, voice coding, a natural-language terminal, one-click test generation, AI-powered source control, a repository dependency graph, workspace memory, a consequence engine for safe agents, and mission-based long-running workflows.
 
-Works out-of-the-box in **Demo mode** (no API key needed), and supports **OpenAI**, **Anthropic**, and local **Ollama** when you add keys.
+Works out-of-the-box in **Demo mode** (no API key needed), and supports **10 LLM providers** including OpenAI, Anthropic, Google Gemini, Groq, Mistral, Together, DeepSeek, and local options like Ollama and LocalAI.
 
 ---
 
@@ -166,14 +166,24 @@ Then open **http://localhost:8787** — the Express server serves both the API a
 
 ### AI Providers
 
-| Provider | Needs | Notes |
-|---|---|---|
-| **Demo** | Nothing | Built-in simulated AI — works instantly |
-| **OpenAI** | API key | GPT-4o, GPT-4o-mini, o1… |
-| **Anthropic** | API key | Claude 3.5 Sonnet / Haiku |
-| **Ollama** | Local Ollama | Run fully offline |
+Newton uses a **table-driven provider registry** — adding a new provider is just one entry in `PROVIDER_REGISTRY` (`shared/types.ts`). All providers support streaming and work across chat, agent mode, inline edits, and Copilot.
 
-API keys are configured via the **Settings** panel (gear icon or `⌘,`) and stored in your browser's `localStorage`.
+| Provider | ID | Needs | Default Models | Notes |
+|---|---|---|---|---|
+| **Demo** | `demo` | Nothing | — | Built-in simulated AI — works instantly, no key needed |
+| **OpenAI** | `openai` | API key | `gpt-4o-mini`, `gpt-4o`, `o1` | Supports custom base URL (Azure, proxies) |
+| **Anthropic** | `anthropic` | API key | `claude-3-5-sonnet-20241022`, `claude-3-5-haiku-20241022` | Claude Messages API |
+| **Google Gemini** | `gemini` | API key | `gemini-1.5-pro`, `gemini-1.5-flash`, `gemini-2.0-flash` | Google AI Studio |
+| **Groq** | `groq` | API key | `llama-3.3-70b-versatile`, `mixtral-8x7b-32768` | Ultra-fast inference |
+| **Mistral** | `mistral` | API key | `mistral-large-latest`, `codestral-latest` | Mistral AI platform |
+| **Together** | `together` | API key | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | Open-source model hosting |
+| **DeepSeek** | `deepseek` | API key | `deepseek-chat`, `deepseek-coder` | Cost-effective coding models |
+| **Ollama** | `ollama` | Local Ollama | `llama3.1`, `qwen2.5-coder`, `deepseek-r1` | Run fully offline — `ollama serve` |
+| **LocalAI** | `localai` | LocalAI server | `gpt-4`, custom | Self-hosted OpenAI-compatible endpoint |
+
+> **Tip:** You can type any custom model name in the model field — the suggestions are just starting points.
+
+API keys are configured via the **Settings** panel (gear icon or `⌘,`) and stored in your browser's `localStorage`. Keys are sent only to the local Newton server, which proxies to the provider.
 
 ### Environment Variables (optional)
 

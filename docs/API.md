@@ -157,12 +157,24 @@ Streams an AI response via plain-text chunked transfer (acts like SSE).
 
 **Provider configs:**
 
-| Provider | `provider` | `model` examples | `apiKey` | `baseUrl` |
-|---|---|---|---|---|
-| Demo | `"demo"` | `"demo"` | — | — |
-| OpenAI | `"openai"` | `gpt-4o-mini`, `gpt-4o` | ✅ | optional |
-| Anthropic | `"anthropic"` | `claude-3-5-sonnet-20241022` | ✅ | — |
-| Ollama | `"ollama"` | `llama3.1`, `qwen2.5-coder` | — | optional |
+Newton supports 10 providers via a table-driven registry. All providers use the same `provider` object shape:
+
+| Provider | `provider` | `model` examples | `apiKey` | `baseUrl` | Protocol |
+|---|---|---|---|---|---|
+| Demo | `"demo"` | `"demo"` | — | — | built-in |
+| OpenAI | `"openai"` | `gpt-4o-mini`, `gpt-4o`, `o1` | ✅ | optional | openai |
+| Anthropic | `"anthropic"` | `claude-3-5-sonnet-20241022`, `claude-3-5-haiku-20241022` | ✅ | — | anthropic |
+| Google Gemini | `"gemini"` | `gemini-1.5-pro`, `gemini-1.5-flash`, `gemini-2.0-flash` | ✅ | — | google |
+| Groq | `"groq"` | `llama-3.3-70b-versatile`, `mixtral-8x7b-32768` | ✅ | optional | openai |
+| Mistral | `"mistral"` | `mistral-large-latest`, `codestral-latest` | ✅ | optional | openai |
+| Together | `"together"` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | ✅ | optional | openai |
+| DeepSeek | `"deepseek"` | `deepseek-chat`, `deepseek-coder` | ✅ | optional | openai |
+| Ollama | `"ollama"` | `llama3.1`, `qwen2.5-coder`, `deepseek-r1` | — | optional | ollama |
+| LocalAI | `"localai"` | `gpt-4`, custom | — | ✅ required | openai |
+
+> **Protocols:** `openai` = `POST /v1/chat/completions` · `anthropic` = Claude Messages API · `google` = Gemini `streamGenerateContent` · `ollama` = `/api/chat` · `demo` = built-in simulated AI
+
+> **Tip:** Any custom model name can be passed — the examples are defaults. Providers using the `openai` protocol accept a `baseUrl` override for self-hosted or proxy endpoints.
 
 **Response:** Plain-text stream. Tokens are written as they arrive. The stream ends when the response closes.
 
