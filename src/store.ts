@@ -6,6 +6,9 @@ import {
   type Settings,
   type ChatMessage,
   type Provider,
+  type WorkspaceMemory,
+  type MemoryEntryType,
+  type Mission,
 } from '../shared/types'
 
 // ---------- types ----------
@@ -47,9 +50,18 @@ interface NewtonState {
   paletteOpen: boolean
   sidebarVisible: boolean
   chatVisible: boolean
-  activeView: 'explorer' | 'search' | 'settings'
+  activeView: 'explorer' | 'search' | 'scm' | 'graph' | 'memory' | 'mission'
   settings: Settings
   toasts: Toast[]
+
+  // git / source control
+  gitStatus: GitStatusData | null
+  gitBusy: boolean
+  diffText: string | null
+  diffBusy: boolean
+  /** AI-generated explanation or review of a diff (shown in modal) */
+  aiInsight: { kind: 'explain' | 'review'; text: string } | null
+  aiInsightBusy: boolean
 
   // codebase search / @-mentions
   searchResults: SearchHit[]
@@ -102,8 +114,36 @@ interface NewtonState {
   setPaletteOpen: (v: boolean) => void
   setSidebarVisible: (v: boolean) => void
   setChatVisible: (v: boolean) => void
-  setActiveView: (v: 'explorer' | 'search' | 'settings') => void
+  setActiveView: (v: 'explorer' | 'search' | 'scm' | 'graph' | 'memory' | 'mission') => void
   toast: (text: string) => void
+
+  // git / source control
+  refreshGit: () => Promise<void>
+  stageFiles: (paths: string[]) => Promise<void>
+  unstageFiles: (paths: string[]) => Promise<void>
+  stageAll: () => Promise<void>
+  gitCommit: (message: string) => Promise<boolean>
+  gitInit: () => Promise<void>
+  viewDiff: (path: string, staged: boolean) => Promise<void>
+  clearDiff: () => void
+
+  // ---------- AI SCM ----------
+  /** Generate a commit message from the current staged diff. Returns the message or null. */
+  aiSuggestCommit: () => Promise<string | null>
+  /** Ask the AI to explain a diff (shows result in the insight panel). */
+  aiExplainDiff: (diff: string, path?: string) => Promise<void>
+  /** Ask the AI to review a diff for bugs/security/perf (shows result in the insight panel). */
+  aiReviewDiff: (diff: string, files: string[]) => Promise<void>
+  clearAiInsight: () => void
+
+  // ---------- repository graph ----------
+  graphData: RepoGraphData | null
+  graphLoading: boolean
+  impactData: { file: string; impacted: { id: string; path: string; language?: string }[]; directDeps: string[] } | null
+  impactLoading: boolean
+  loadGraph: (force?: boolean) => Promise<void>
+  loadImpact: (file: string) => Promise<void>
+  clearImpact: () => void
 
   // codebase search / @-mentions
   searchCode: (query: string) => Promise<void>
@@ -114,6 +154,27 @@ interface NewtonState {
   clearAttached: () => void
   refreshIndexStats: () => Promise<void>
   rebuildIndex: () => Promise<void>
+
+  // ---------- workspace memory ----------
+  memory: WorkspaceMemory | null
+  memoryBusy: boolean
+  welcomeDigest: string | null
+  loadMemory: () => Promise<void>
+  refreshMemory: () => Promise<void>
+  addMemoryEntry: (type: MemoryEntryType, text: string) => Promise<void>
+  removeMemoryEntry: (id: string) => Promise<void>
+
+  // ---------- mission control ----------
+  missions: Mission[]
+  activeMission: Mission | null
+  missionBusy: boolean
+  loadMissions: () => Promise<void>
+  startMission: (goal: string, contextFiles?: string[]) => Promise<Mission | null>
+  refreshMission: (id: string) => Promise<void>
+  patchMission: (id: string, patch: Partial<Mission>) => Promise<void>
+  removeMission: (id: string) => Promise<void>
+  verifyMission: (id: string) => Promise<void>
+  setActiveMission: (m: Mission | null) => void
 }
 
 export interface SearchHit {
@@ -130,6 +191,41 @@ export interface SearchHit {
 export interface AttachedFile {
   path: string
   content: string
+}
+
+// ---------- repo graph types ----------
+export interface RepoGraphData {
+  nodes: Record<
+    string,
+    {
+      id: string
+      path: string
+      language: string
+      lineCount: number
+      symbolCount: number
+      imports: string[]
+      externalDeps: string[]
+    }
+  >
+  edges: Array<{ source: string; target: string }>
+  buildStats: { parsed: number; cached: number; total: number }
+}
+
+// ---------- git types ----------
+export interface GitFileChange {
+  path: string
+  status: 'M' | 'A' | 'D' | 'R' | 'U' | 'C'
+  staged: boolean
+  oldPath?: string
+}
+
+export interface GitStatusData {
+  initialized: boolean
+  branch: string | null
+  ahead: number
+  behind: number
+  changes: GitFileChange[]
+  head: { hash: string; message: string; author: string; date: string } | null
 }
 
 // ---------- helpers ----------
@@ -233,6 +329,20 @@ export const useStore = create<NewtonState>((set, get) => ({
   searchQuery: '',
   attachedContext: [],
   indexStats: null,
+
+  // git / source control
+  gitStatus: null,
+  gitBusy: false,
+  diffText: null,
+  diffBusy: false,
+  aiInsight: null,
+  aiInsightBusy: false,
+
+  // repository graph
+  graphData: null,
+  graphLoading: false,
+  impactData: null,
+  impactLoading: false,
 
   refreshTree: async () => {
     set({ treeLoading: true })
@@ -654,6 +764,429 @@ export const useStore = create<NewtonState>((set, get) => ({
       get().toast('Index rebuild failed')
     }
   },
+
+  // ---------- git / source control ----------
+  refreshGit: async () => {
+    set({ gitBusy: true })
+    try {
+      const r = await fetch('/api/git/status')
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const data = (await r.json()) as GitStatusData
+      set({ gitStatus: data, gitBusy: false })
+    } catch {
+      set({ gitBusy: false })
+    }
+  },
+
+  stageFiles: async (paths) => {
+    if (!paths.length) return
+    set({ gitBusy: true })
+    try {
+      await fetch('/api/git/stage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths }),
+      })
+      await get().refreshGit()
+    } catch {
+      set({ gitBusy: false })
+      get().toast('Stage failed')
+    }
+  },
+
+  unstageFiles: async (paths) => {
+    if (!paths.length) return
+    set({ gitBusy: true })
+    try {
+      await fetch('/api/git/unstage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths }),
+      })
+      await get().refreshGit()
+    } catch {
+      set({ gitBusy: false })
+      get().toast('Unstage failed')
+    }
+  },
+
+  stageAll: async () => {
+    const all = (get().gitStatus?.changes ?? []).map((c) => c.path)
+    if (all.length === 0) return
+    await get().stageFiles(all)
+  },
+
+  gitCommit: async (message) => {
+    if (!message.trim()) {
+      get().toast('Commit message required')
+      return false
+    }
+    set({ gitBusy: true })
+    try {
+      const r = await fetch('/api/git/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      })
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}))
+        throw new Error(e.error ?? `HTTP ${r.status}`)
+      }
+      await get().refreshGit()
+      get().toast('Committed ✓')
+      return true
+    } catch (e) {
+      set({ gitBusy: false })
+      get().toast(`Commit failed: ${(e as Error).message}`)
+      return false
+    }
+  },
+
+  gitInit: async () => {
+    set({ gitBusy: true })
+    try {
+      await fetch('/api/git/init', { method: 'POST' })
+      await get().refreshGit()
+      get().toast('Git repository initialized')
+    } catch {
+      set({ gitBusy: false })
+      get().toast('Git init failed')
+    }
+  },
+
+  viewDiff: async (path, staged) => {
+    set({ diffBusy: true })
+    try {
+      const r = await fetch(
+        `/api/git/diff?path=${encodeURIComponent(path)}&staged=${staged}`,
+      )
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const data = await r.json()
+      set({ diffText: data.diff || '(no changes)', diffBusy: false })
+    } catch {
+      set({ diffText: '(could not load diff)', diffBusy: false })
+    }
+  },
+
+  clearDiff: () => set({ diffText: null }),
+
+  // ---------- AI SCM ----------
+  aiSuggestCommit: async () => {
+    set({ gitBusy: true })
+    try {
+      // Fetch the staged diff to analyze
+      const r = await fetch('/api/git/status')
+      if (!r.ok) throw new Error('git status failed')
+      const status = (await r.json()) as GitStatusData
+      const staged = status.changes.filter((c) => c.staged)
+      let diff = ''
+      if (staged.length > 0) {
+        const dr = await fetch('/api/git/diff?staged=true')
+        const dd = await dr.json()
+        diff = dd.diff ?? ''
+      }
+      if (!diff.trim()) {
+        get().toast('Stage some changes first')
+        set({ gitBusy: false })
+        return null
+      }
+      const cfg = providerConfig(get().settings)
+      const sr = await fetch('/api/git/suggest-commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ diff, provider: cfg }),
+      })
+      if (!sr.ok) throw new Error(`HTTP ${sr.status}`)
+      const data = await sr.json()
+      set({ gitBusy: false })
+      return data.message ?? 'chore: update files'
+    } catch (e) {
+      set({ gitBusy: false })
+      get().toast(`Commit suggestion failed: ${(e as Error).message}`)
+      return null
+    }
+  },
+
+  aiExplainDiff: async (diff, filePath) => {
+    set({ aiInsightBusy: true, aiInsight: null })
+    try {
+      const cfg = providerConfig(get().settings)
+      const r = await fetch('/api/git/explain-diff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ diff, path: filePath, provider: cfg }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const data = await r.json()
+      set({ aiInsight: { kind: 'explain', text: data.explanation ?? '(no explanation)' } })
+    } catch (e) {
+      set({ aiInsight: { kind: 'explain', text: `⚠️ ${(e as Error).message}` } })
+    } finally {
+      set({ aiInsightBusy: false })
+    }
+  },
+
+  aiReviewDiff: async (diff, files) => {
+    set({ aiInsightBusy: true, aiInsight: null })
+    try {
+      const cfg = providerConfig(get().settings)
+      const r = await fetch('/api/git/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ diff, files, provider: cfg }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const data = await r.json()
+      const findings = (data.findings ?? []) as Array<{
+        severity: string
+        category: string
+        message: string
+      }>
+      const parts: string[] = []
+      parts.push(`**Code Review** — Score: ${data.score ?? 'N/A'}/100`)
+      parts.push('')
+      parts.push(data.summary ?? '')
+      parts.push('')
+      const sevOrder = ['critical', 'warning', 'info', 'praise']
+      const sevEmoji: Record<string, string> = {
+        critical: '🔴',
+        warning: '🟡',
+        info: '🔵',
+        praise: '🟢',
+      }
+      findings
+        .sort((a, b) => sevOrder.indexOf(a.severity) - sevOrder.indexOf(b.severity))
+        .forEach((f) => {
+          parts.push(
+            `${sevEmoji[f.severity] ?? '•'} **${f.severity.toUpperCase()}** (${f.category}): ${f.message}`,
+          )
+        })
+      set({ aiInsight: { kind: 'review', text: parts.join('\n') } })
+    } catch (e) {
+      set({ aiInsight: { kind: 'review', text: `⚠️ ${(e as Error).message}` } })
+    } finally {
+      set({ aiInsightBusy: false })
+    }
+  },
+
+  clearAiInsight: () => set({ aiInsight: null }),
+
+  // ---------- repository graph ----------
+  loadGraph: async (force) => {
+    set({ graphLoading: true })
+    try {
+      const r = await fetch(`/api/graph${force ? '?force=true' : ''}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const data = (await r.json()) as RepoGraphData
+      set({ graphData: data, graphLoading: false })
+    } catch (e) {
+      set({ graphLoading: false })
+      get().toast(`Graph failed: ${(e as Error).message}`)
+    }
+  },
+
+  loadImpact: async (file) => {
+    set({ impactLoading: true })
+    try {
+      const r = await fetch(`/api/graph/impact?file=${encodeURIComponent(file)}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const data = await r.json()
+      set({ impactData: data, impactLoading: false })
+    } catch (e) {
+      set({ impactLoading: false })
+      get().toast(`Impact analysis failed: ${(e as Error).message}`)
+    }
+  },
+
+  clearImpact: () => set({ impactData: null }),
+
+  // ---------- workspace memory ----------
+  memory: null,
+  memoryBusy: false,
+  welcomeDigest: null,
+
+  loadMemory: async () => {
+    set({ memoryBusy: true })
+    try {
+      const r = await fetch('/api/memory')
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const mem = await r.json()
+      // also fetch welcome digest
+      let digest: string | null = null
+      try {
+        const wr = await fetch('/api/memory/welcome')
+        const wd = await wr.json()
+        digest = wd.digest ?? null
+      } catch {
+        /* optional */
+      }
+      set({ memory: mem, welcomeDigest: digest, memoryBusy: false })
+    } catch {
+      set({ memoryBusy: false })
+    }
+  },
+
+  refreshMemory: async () => {
+    set({ memoryBusy: true })
+    try {
+      const r = await fetch('/api/memory/refresh', { method: 'POST' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const mem = await r.json()
+      let digest: string | null = null
+      try {
+        const wr = await fetch('/api/memory/welcome')
+        const wd = await wr.json()
+        digest = wd.digest ?? null
+      } catch {
+        /* optional */
+      }
+      set({ memory: mem, welcomeDigest: digest, memoryBusy: false })
+      get().toast(`Memory refreshed — ${mem.techStack?.length ?? 0} technologies detected`)
+    } catch (e) {
+      set({ memoryBusy: false })
+      get().toast(`Memory refresh failed: ${(e as Error).message}`)
+    }
+  },
+
+  addMemoryEntry: async (type, text) => {
+    if (!text.trim()) return
+    try {
+      const r = await fetch('/api/memory/entry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, text, source: 'manual' }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const mem = await r.json()
+      set({ memory: mem })
+    } catch (e) {
+      get().toast(`Add entry failed: ${(e as Error).message}`)
+    }
+  },
+
+  removeMemoryEntry: async (id) => {
+    try {
+      const r = await fetch(`/api/memory/entry/${id}`, { method: 'DELETE' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const mem = await r.json()
+      set({ memory: mem })
+    } catch (e) {
+      get().toast(`Remove entry failed: ${(e as Error).message}`)
+    }
+  },
+
+  // ---------- mission control ----------
+  missions: [],
+  activeMission: null,
+  missionBusy: false,
+
+  loadMissions: async () => {
+    try {
+      const r = await fetch('/api/missions')
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const list = (await r.json()) as Mission[]
+      set({ missions: list })
+    } catch {
+      /* ignore */
+    }
+  },
+
+  startMission: async (goal, contextFiles = []) => {
+    const trimmed = goal.trim()
+    if (!trimmed) return null
+    set({ missionBusy: true })
+    try {
+      const cfg = providerConfig(get().settings)
+      const r = await fetch('/api/missions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goal: trimmed, contextFiles, provider: cfg }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const mission = (await r.json()) as Mission
+      set((s) => ({
+        missions: [mission, ...s.missions.filter((m) => m.id !== mission.id)],
+        activeMission: mission,
+        missionBusy: false,
+      }))
+      get().toast(`Mission started: ${mission.steps.length} steps planned`)
+      return mission
+    } catch (e) {
+      set({ missionBusy: false })
+      get().toast(`Mission start failed: ${(e as Error).message}`)
+      return null
+    }
+  },
+
+  refreshMission: async (id) => {
+    try {
+      const r = await fetch(`/api/missions/${id}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const mission = (await r.json()) as Mission
+      set((s) => ({
+        missions: s.missions.map((m) => (m.id === id ? mission : m)),
+        activeMission: s.activeMission?.id === id ? mission : s.activeMission,
+      }))
+    } catch {
+      /* ignore */
+    }
+  },
+
+  patchMission: async (id, patch) => {
+    set({ missionBusy: true })
+    try {
+      const r = await fetch(`/api/missions/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const mission = (await r.json()) as Mission
+      set((s) => ({
+        missions: s.missions.map((m) => (m.id === id ? mission : m)),
+        activeMission: s.activeMission?.id === id ? mission : s.activeMission,
+        missionBusy: false,
+      }))
+    } catch (e) {
+      set({ missionBusy: false })
+      get().toast(`Mission update failed: ${(e as Error).message}`)
+    }
+  },
+
+  removeMission: async (id) => {
+    try {
+      const r = await fetch(`/api/missions/${id}`, { method: 'DELETE' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      set((s) => ({
+        missions: s.missions.filter((m) => m.id !== id),
+        activeMission: s.activeMission?.id === id ? null : s.activeMission,
+      }))
+      get().toast('Mission deleted')
+    } catch (e) {
+      get().toast(`Delete failed: ${(e as Error).message}`)
+    }
+  },
+
+  verifyMission: async (id) => {
+    set({ missionBusy: true })
+    try {
+      const r = await fetch(`/api/missions/${id}/verify`, { method: 'POST' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const mission = (await r.json()) as Mission
+      set((s) => ({
+        missions: s.missions.map((m) => (m.id === id ? mission : m)),
+        activeMission: s.activeMission?.id === id ? mission : s.activeMission,
+        missionBusy: false,
+      }))
+      const passed = mission.outcomes.every((o) => o.passed)
+      get().toast(passed ? 'Mission verified ✓ — all outcomes passed' : 'Verification complete — some outcomes failed')
+    } catch (e) {
+      set({ missionBusy: false })
+      get().toast(`Verify failed: ${(e as Error).message}`)
+    }
+  },
+
+  setActiveMission: (m) => set({ activeMission: m }),
 }))
 
 // ---------- settings persistence ----------

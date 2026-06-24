@@ -246,6 +246,206 @@ Executes a single step (writes `after` content to disk).
 
 ---
 
+## Consequence Engine (RecourseOS)
+
+### `POST /api/agent/assess`
+Risk-assesses one or more proposed agent steps **before** execution. The frontend uses this to gate high-risk / irreversible operations behind explicit approval.
+
+**Body:** `{ "steps": AgentStep[] }`
+
+**Response:** (`ConsequenceReport`)
+```json
+{
+  "steps": [
+    {
+      "stepId": "step-1",
+      "path": "src/store.ts",
+      "action": "edit",
+      "risk": "low",
+      "reversibility": "git",
+      "changeVolume": 12,
+      "flags": [],
+      "safetyScore": 88
+    }
+  ],
+  "overallRisk": "low",
+  "requiresApproval": false,
+  "hasIrreversible": false,
+  "blastRadius": 3,
+  "overallSafetyScore": 88,
+  "summary": "1 edit to a source file under version control.",
+  "recommendations": ["Commit before running to make this reversible via git."]
+}
+```
+
+**Risk levels:** `safe` < `low` < `medium` < `high` < `critical`
+**Reversibility:** `trivial` < `git` < `difficult` < `irreversible`
+
+---
+
+## AI-Powered Source Control (Git)
+
+### `GET /api/git/status`
+Returns `git status --porcelain` parsed into structured file entries with staged/unstaged flags.
+
+### `GET /api/git/diff?staged=<bool>&path=<path>`
+Returns a unified diff. If `staged=true`, shows staged changes; otherwise the working-tree diff. Optional `path` scopes to one file.
+
+### `POST /api/git/stage` · `POST /api/git/unstage`
+**Body:** `{ "path": "src/App.tsx" }` — stages or unstages a single file.
+
+### `POST /api/git/commit`
+**Body:** `{ "message": "feat: add toggle" }` — commits staged changes.
+
+### `GET /api/git/log?limit=<n>`
+Returns recent commits (`hash`, `message`, `author`, `date`).
+
+### `POST /api/git/init`
+Initializes a git repo in the workspace if one doesn't exist.
+
+### `POST /api/git/suggest-commit`
+AI-generates a conventional-commit message from a diff.
+
+**Body:** (`CommitSuggestionRequest`)
+```json
+{ "diff": "diff --git ...", "provider": { "provider": "demo", "model": "demo" } }
+```
+**Response:** `{ "message": "feat(auth): add login redirect" }`
+
+### `POST /api/git/explain-diff`
+Natural-language summary of what a diff changes and why.
+
+**Body:** (`ExplainDiffRequest`) — `{ "diff", "path?", "provider" }`
+**Response:** `{ "explanation": "This adds a dark-mode toggle and persists the choice to localStorage..." }`
+
+### `POST /api/git/review`
+AI code review of a diff. Returns findings + a health score.
+
+**Body:** (`CodeReviewRequest`) — `{ "diff", "files": ["src/App.tsx"], "provider" }`
+**Response:** (`CodeReviewResponse`)
+```json
+{
+  "findings": [
+    {
+      "severity": "warning",
+      "category": "security",
+      "message": "User input used directly in SQL query — consider parameterizing.",
+      "file": "src/db.ts",
+      "line": 42
+    }
+  ],
+  "summary": "Mostly solid; one security concern to address.",
+  "score": 78
+}
+```
+**Severities:** `critical` | `warning` | `info` | `praise`
+**Categories:** `bug` | `security` | `performance` | `maintainability` | `style`
+
+---
+
+## Repository Dependency Graph
+
+### `GET /api/graph`
+Returns the full import dependency graph of the workspace.
+
+**Response:**
+```json
+{
+  "nodes": [
+    { "id": "src/App.tsx", "lang": "typescript" }
+  ],
+  "edges": [
+    { "from": "src/App.tsx", "to": "src/store.ts" }
+  ]
+}
+```
+
+### `GET /api/graph/impact?path=<path>`
+Computes the **blast radius** of changing a file — all files that transitively depend on it.
+
+**Response:**
+```json
+{
+  "root": "src/store.ts",
+  "impacted": ["src/App.tsx", "src/components/ChatPanel.tsx"],
+  "count": 2
+}
+```
+
+---
+
+## Workspace Memory
+
+### `GET /api/memory`
+Returns the full `WorkspaceMemory` object: tech stack, structure summary, TODO/FIXME scan, and user/AI entries.
+
+### `POST /api/memory/refresh`
+Re-scans the workspace (tech stack detection, structure, TODOs) and returns the updated memory.
+
+### `POST /api/memory/entry`
+Adds a manual memory entry (decision / note / pattern).
+
+**Body:** `{ "type": "decision", "text": "We use Zustand for state, not Redux." }`
+
+### `DELETE /api/memory/entry?id=<id>`
+Removes a memory entry by id.
+
+> 💡 The chat endpoint (`POST /api/chat`) automatically injects a compact workspace-memory digest (tech stack + recent entries) into the system prompt.
+
+---
+
+## Mission Control
+
+### `POST /api/missions`
+Creates a new mission + generates an initial plan.
+
+**Body:**
+```json
+{
+  "goal": "Add JWT auth to all protected routes",
+  "provider": { "provider": "demo", "model": "demo" },
+  "contextFiles": ["src/router.ts", "src/middleware.ts"]
+}
+```
+**Response:** A full `Mission` object (see `shared/types.ts`).
+
+### `GET /api/missions`
+Lists all missions (newest first).
+
+### `GET /api/missions/:id`
+Returns a single mission by id.
+
+### `PATCH /api/missions/:id`
+Updates a mission's mutable fields — used to advance step status, pause/resume/cancel the mission, or change its phase.
+
+**Body (all fields optional):**
+```json
+{
+  "status": "paused",
+  "phase": "verify",
+  "steps": [
+    { "id": "s1", "status": "done", "completedAt": 1719000000000 }
+  ]
+}
+```
+| field | type | description |
+|-------|------|-------------|
+| `status` | `MissionStatus` | `planning` \| `running` \| `paused` \| `done` \| `failed` \| `cancelled` |
+| `phase` | `MissionPhase` | `understand` \| `plan` \| `execute` \| `verify` \| `report` |
+| `steps` | `MissionStep[]` | Updated step array (e.g. mark a step `running`/`done`) |
+
+**Response:** The updated `Mission`.
+
+### `DELETE /api/missions/:id`
+Deletes a mission and its history.
+
+### `POST /api/missions/:id/verify`
+Runs the mission's defined **outcomes** (build / tests / lint) and records whether each passed, along with metrics.
+
+**Response:** The updated `Mission` with `outcomes[].passed` and `metrics` filled in.
+
+---
+
 ## Copilot Autocomplete
 
 ### `POST /api/copilot`
@@ -368,3 +568,4 @@ For AI endpoints, errors are streamed as plain text prefixed with `⚠️`:
 ```
 > ⚠️ Error contacting provider: OpenAI 401: Unauthorized
 > Switch to Demo mode or add a valid key in Settings.
+```

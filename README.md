@@ -1,6 +1,6 @@
 # 🟣 Newton — Better Than Cursor
 
-**Newton** is a polished, AI-native code editor that runs in your browser — a genuine Cursor alternative built from scratch. It bundles a full Monaco editor, multi-provider LLM assistant, autonomous agent mode, Copilot-style autocomplete, inline AI edits, voice coding, a natural-language terminal, and one-click test generation.
+**Newton** is a polished, AI-native code editor that runs in your browser — a genuine Cursor alternative built from scratch. It bundles a full Monaco editor, multi-provider LLM assistant, autonomous agent mode, Copilot-style autocomplete, inline AI edits, voice coding, a natural-language terminal, one-click test generation, AI-powered source control, a repository dependency graph, workspace memory, a consequence engine for safe agents, and mission-based long-running workflows.
 
 Works out-of-the-box in **Demo mode** (no API key needed), and supports **OpenAI**, **Anthropic**, and local **Ollama** when you add keys.
 
@@ -47,6 +47,7 @@ Works out-of-the-box in **Demo mode** (no API key needed), and supports **OpenAI
 - Each step targets a specific file with a diff
 - **Run all** or **run step-by-step** with accept/reject
 - Live status: pending / running / done / error
+- **Consequence Engine** assesses each step's risk (destructive ops, blast radius, reversibility) and gates high-risk changes behind explicit approval
 
 ### 💡 Copilot Autocomplete
 - Ghost-text completions as you type (like Cursor Tab / Copilot)
@@ -70,6 +71,35 @@ Works out-of-the-box in **Demo mode** (no API key needed), and supports **OpenAI
 - Open any file, hit **Gen Tests**
 - Newton analyzes the code and writes a test file (`.test.ts` etc.)
 - Test file opens automatically
+
+### 🌿 AI-Powered Source Control — *Innovation*
+- **Inline Git panel:** status, stage/unstage, commit, and log without leaving the editor
+- **AI commit messages:** one click generates a conventional-commit message from your staged diff
+- **Explain this diff:** natural-language summary of what changed and why
+- **AI code review:** scans your diff for bugs, security issues, performance, and style — with a 0–100 health score
+
+### 🗺️ Repository Dependency Graph — *Innovation*
+- Click any file in the explorer to see what it imports and what imports it
+- **Impact analysis:** "If I change `src/store.ts`, what else breaks?" — multi-hop reachability across the import graph
+- Built by static-parsing `import`/`require`/`from` statements for JS/TS, Python, Go, Rust, and more
+
+### 🧠 Workspace Memory — *Innovation*
+- Newton **remembers your project**: detected tech stack, file/language breakdown, and all `TODO`/`FIXME`/`HACK` markers
+- AI-suggested and manual **memory entries** (decisions, patterns, notes) persist across sessions
+- Chat is automatically enriched with workspace memory, so the AI knows your stack and conventions
+- "Welcome back" banner surfaces recent files and pending TODOs
+
+### 🛡️ RecourseOS Consequence Engine — *Innovation*
+- Every proposed agent action is **risk-assessed** before execution
+- Flags destructive ops, secrets/credentials, blast radius, and mass deletions
+- Classifies reversibility (`trivial` → `git` → `difficult` → `irreversible`)
+- High-risk and irreversible plans require **explicit approval**
+
+### 🎯 Mission Control — *Innovation*
+- Launch **long-running, goal-oriented missions** ("migrate this app to TypeScript", "add auth", "fix all failing tests")
+- Each mission has defined **outcomes** (tests pass, build succeeds, lint clean) that Newton **verifies** automatically
+- Tracks files changed, lines added/removed, and test/build results as metrics
+- Pause, resume, and review completed missions
 
 ---
 
@@ -166,15 +196,20 @@ client (React + Vite + Zustand + Monaco)
 server (Express + tsx)
   ├── /api/files         — file tree
   ├── /api/file          — read / write / delete / rename / create
-  ├── /api/chat          — streaming AI chat (SSE, auto-context)
+  ├── /api/chat          — streaming AI chat (SSE, auto-context + memory)
   ├── /api/search        — semantic codebase search (TF-IDF)
   ├── /api/index/*       — indexer stats / rebuild
   ├── /api/edit          — inline AI edit (⌘K)
   ├── /api/copilot       — ghost-text completion
-  ├── /api/agent/*       — plan + apply agent steps
+  ├── /api/agent/*       — plan + assess + apply agent steps
+  ├── /api/agent/assess  — Consequence Engine risk assessment
   ├── /api/nlsh          — natural-language → shell
   ├── /api/exec          — run shell command
   ├── /api/gen-tests     — AI test generation
+  ├── /api/git/*         — AI source control (status/diff/stage/commit/review)
+  ├── /api/graph         — dependency graph + impact analysis
+  ├── /api/memory        — workspace memory (tech stack, TODOs, entries)
+  ├── /api/missions      — mission control (create/plan/verify)
   └── /api/health        — health check
 ```
 

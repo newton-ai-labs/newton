@@ -12,9 +12,12 @@ import {
   ChevronDown,
   ChevronRight,
   Sparkles,
+  ShieldAlert,
+  ShieldCheck,
+  Zap,
 } from 'lucide-react'
 import { useStore } from '../store'
-import type { AgentPlan, AgentStep } from '../../shared/types'
+import type { AgentPlan, AgentStep, ConsequenceReport } from '../../shared/types'
 
 const API = import.meta.env.VITE_API_BASE || ''
 
@@ -31,6 +34,14 @@ export default function AgentPanel() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [done, setDone] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // RecourseOS: consequence assessment
+  const [consequence, setConsequence] = useState<ConsequenceReport | null>(null)
+  const [assessing, setAssessing] = useState(false)
+  const [approved, setApproved] = useState(false)
+  const [confirmText, setConfirmText] = useState('')
+  const requiresConfirm = consequence?.overallRisk === 'critical' || !!consequence?.hasIrreversible
+  const canRun = !consequence || !consequence.requiresApproval || approved || (requiresConfirm && confirmText.trim().toLowerCase() === 'approve')
 
   const providerConfig = {
     provider: settings.provider,
@@ -76,8 +87,31 @@ export default function AgentPanel() {
       if (!r.ok) throw new Error((await r.json()).error || 'Planning failed')
       const p: AgentPlan = await r.json()
       setPlan(p)
+      setConsequence(null)
+      setApproved(false)
+      setConfirmText('')
       // expand all by default
       setExpanded(new Set(p.steps.map((s) => s.id)))
+
+      // RecourseOS: assess the plan for risk before the user runs it
+      if (p.steps.length > 0) {
+        setAssessing(true)
+        try {
+          const ar = await fetch(`${API}/api/agent/assess`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ steps: p.steps }),
+          })
+          if (ar.ok) {
+            const report: ConsequenceReport = await ar.json()
+            setConsequence(report)
+          }
+        } catch {
+          /* assessment is best-effort */
+        } finally {
+          setAssessing(false)
+        }
+      }
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -87,6 +121,7 @@ export default function AgentPanel() {
 
   async function handleRunAll() {
     if (!plan) return
+    if (consequence?.requiresApproval && !canRun) return
     setExecuting(true)
     setError(null)
     setDone(false)
@@ -196,7 +231,7 @@ export default function AgentPanel() {
             <button
               className="agent-btn success"
               onClick={handleRunAll}
-              disabled={executing || done}
+              disabled={executing || done || !canRun}
             >
               {executing ? <Loader2 size={13} className="spin" /> : <Play size={13} />}
               {done ? 'Done' : 'Run All'}
@@ -211,6 +246,19 @@ export default function AgentPanel() {
       </div>
 
       {error && <div className="agent-error">⚠️ {error}</div>}
+
+      {/* RecourseOS: Consequence Engine report */}
+      {(assessing || consequence) && (
+        <ConsequenceBanner
+          report={consequence}
+          assessing={assessing}
+          approved={approved}
+          requiresConfirm={requiresConfirm}
+          confirmText={confirmText}
+          setConfirmText={setConfirmText}
+          setApproved={setApproved}
+        />
+      )}
 
       {plan && (
         <div className="agent-plan">
@@ -296,4 +344,93 @@ function StatusBadge({ status }: { status: AgentStep['status'] }) {
     return <Loader2 size={12} className="spin" style={{ color: 'var(--accent)' }} />
   if (status === 'error') return <X size={12} style={{ color: '#f87171' }} />
   return <span className="agent-pending-dot" />
+}
+
+function riskColor(risk?: string): string {
+  switch (risk) {
+    case 'critical': return '#ef4444'
+    case 'high': return '#f97316'
+    case 'medium': return '#eab308'
+    case 'low': return '#22c55e'
+    default: return '#4ade80'
+  }
+}
+
+function ConsequenceBanner(props: {
+  report: ConsequenceReport | null
+  assessing: boolean
+  approved: boolean
+  requiresConfirm: boolean
+  confirmText: string
+  setConfirmText: (v: string) => void
+  setApproved: (v: boolean) => void
+}) {
+  const { report, assessing, approved, requiresConfirm, confirmText, setConfirmText, setApproved } = props
+
+  if (assessing) {
+    return (
+      <div className="consequence-banner assessing">
+        <Loader2 size={14} className="spin" />
+        <span>Analyzing risk…</span>
+      </div>
+    )
+  }
+  if (!report) return null
+
+  const safe = report.overallRisk === 'safe' || report.overallRisk === 'low'
+
+  return (
+    <div
+      className="consequence-banner"
+      style={{ borderLeftColor: riskColor(report.overallRisk) }}
+    >
+      <div className="consequence-head">
+        {safe ? (
+          <ShieldCheck size={14} style={{ color: '#4ade80' }} />
+        ) : (
+          <ShieldAlert size={14} style={{ color: riskColor(report.overallRisk) }} />
+        )}
+        <span className="consequence-label" style={{ color: riskColor(report.overallRisk) }}>
+          {report.overallRisk.toUpperCase()} RISK
+        </span>
+        <span className="consequence-summary">{report.summary}</span>
+      </div>
+
+      {report.recommendations.length > 0 && (
+        <ul className="consequence-recs">
+          {report.recommendations.slice(0, 4).map((r, i) => (
+            <li key={i}>{r}</li>
+          ))}
+        </ul>
+      )}
+
+      {report.requiresApproval && !approved && (
+        <div className="consequence-gate">
+          {requiresConfirm ? (
+            <>
+              <input
+                className="consequence-confirm-input"
+                placeholder='Type "approve" to confirm'
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+              />
+            </>
+          ) : (
+            <button
+              className="consequence-approve-btn"
+              onClick={() => setApproved(true)}
+            >
+              <Zap size={12} /> Approve & enable Run All
+            </button>
+          )}
+        </div>
+      )}
+
+      {approved && (
+        <div className="consequence-approved">
+          <Check size={12} /> Approved
+        </div>
+      )}
+    </div>
+  )
 }

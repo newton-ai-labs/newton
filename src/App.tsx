@@ -11,6 +11,11 @@ import {
   Terminal as TermIcon,
   Mic,
   FlaskConical,
+  GitBranch,
+  Network,
+  Brain,
+  Rocket,
+  X,
 } from 'lucide-react'
 import { useStore } from './store'
 import FileExplorer from './components/FileExplorer'
@@ -20,6 +25,10 @@ import SettingsModal from './components/SettingsModal'
 import CommandPalette from './components/CommandPalette'
 import TerminalPanel from './components/TerminalPanel'
 import VoicePanel from './components/VoicePanel'
+import SourceControlPanel from './components/SourceControlPanel'
+import GraphPanel from './components/GraphPanel'
+import MemoryPanel from './components/MemoryPanel'
+import MissionPanel from './components/MissionPanel'
 
 export default function App() {
   const refreshTree = useStore((s) => s.refreshTree)
@@ -40,10 +49,19 @@ export default function App() {
   const setVoiceOpen = useStore((s) => s.setVoiceOpen)
   const generateTests = useStore((s) => s.generateTests)
   const genTestsBusy = useStore((s) => s.genTestsBusy)
+  const gitStatus = useStore((s) => s.gitStatus)
+  const memory = useStore((s) => s.memory)
+  const loadMemory = useStore((s) => s.loadMemory)
+  const [welcomeDismissed, setWelcomeDismissed] = useState(false)
 
   useEffect(() => {
     refreshTree()
-  }, [refreshTree])
+    loadMemory()
+  }, [refreshTree, loadMemory])
+
+  // Show welcome banner once per session when we have a digest and it hasn't been dismissed
+  const welcomeDigest = useStore((s) => s.welcomeDigest)
+  const showWelcome = !welcomeDismissed && !!welcomeDigest && !!memory
 
   // global shortcuts
   useEffect(() => {
@@ -129,6 +147,61 @@ export default function App() {
             <SearchIcon size={20} />
           </button>
           <button
+            className={`activity-btn ${activeView === 'graph' ? 'active' : ''}`}
+            title="Architecture Graph"
+            onClick={() => {
+              if (activeView === 'graph' && sidebarVisible) setSidebarVisible(false)
+              else {
+                setActiveView('graph')
+                setSidebarVisible(true)
+              }
+            }}
+          >
+            <Network size={20} />
+          </button>
+          <button
+            className={`activity-btn ${activeView === 'scm' ? 'active' : ''}`}
+            title="Source Control (⌃G)"
+            onClick={() => {
+              if (activeView === 'scm' && sidebarVisible) setSidebarVisible(false)
+              else {
+                setActiveView('scm')
+                setSidebarVisible(true)
+              }
+            }}
+          >
+            <GitBranch size={20} />
+            {gitStatus && gitStatus.changes.length > 0 && (
+              <span className="activity-badge">{gitStatus.changes.length}</span>
+            )}
+          </button>
+          <button
+            className={`activity-btn ${activeView === 'memory' ? 'active' : ''}`}
+            title="Workspace Memory"
+            onClick={() => {
+              if (activeView === 'memory' && sidebarVisible) setSidebarVisible(false)
+              else {
+                setActiveView('memory')
+                setSidebarVisible(true)
+              }
+            }}
+          >
+            <Brain size={19} />
+          </button>
+          <button
+            className={`activity-btn ${activeView === 'mission' ? 'active' : ''}`}
+            title="Mission Control"
+            onClick={() => {
+              if (activeView === 'mission' && sidebarVisible) setSidebarVisible(false)
+              else {
+                setActiveView('mission')
+                setSidebarVisible(true)
+              }
+            }}
+          >
+            <Rocket size={19} />
+          </button>
+          <button
             className={`activity-btn ${terminalOpen ? 'active' : ''}`}
             title="Terminal (⌃`)"
             onClick={() => setTerminalOpen(!terminalOpen)}
@@ -160,6 +233,33 @@ export default function App() {
         </button>
       </div>
 
+      {/* Welcome Back banner */}
+      {showWelcome && (
+        <div
+          style={{
+            padding: '8px 14px',
+            background: 'linear-gradient(90deg, color-mix(in srgb, var(--blue) 18%, transparent), transparent)',
+            borderBottom: '1px solid var(--border)',
+            fontSize: 12,
+            color: 'var(--text)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <Sparkles size={13} className="spark" style={{ color: 'var(--blue)' }} />
+          <span style={{ flex: 1 }}>{welcomeDigest}</span>
+          <button
+            className="mini-btn"
+            style={{ width: 18, height: 18 }}
+            onClick={() => setWelcomeDismissed(true)}
+            title="Dismiss"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
       {/* Main */}
       <div className="main-area">
         <PanelGroup direction="horizontal" className="main">
@@ -168,6 +268,14 @@ export default function App() {
               <Panel defaultSize={20} minSize={12} maxSize={40} className="sidebar-panel" order={1}>
                 {activeView === 'explorer' ? (
                   <FileExplorer />
+                ) : activeView === 'scm' ? (
+                  <SourceControlPanel />
+                ) : activeView === 'graph' ? (
+                  <GraphPanel />
+                ) : activeView === 'memory' ? (
+                  <MemoryPanel />
+                ) : activeView === 'mission' ? (
+                  <MissionPanel />
                 ) : (
                   <SearchView />
                 )}

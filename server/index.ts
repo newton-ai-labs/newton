@@ -9,6 +9,29 @@ import type { ChatRequest, EditRequest, EditResponse, FileNode, ProviderConfig, 
 import { demoAnswer, streamDemo, demoEdit } from './demoAi.js'
 import { demoPlan, executeStep, llmPlan } from './agent.js'
 import { getIndex, type SearchHit } from './indexing.js'
+import { getGraphBuilder } from './repoGraph.js'
+import {
+  getOrCreateMemory,
+  refreshMemory,
+  loadMemory,
+  addEntry as memAddEntry,
+  removeEntry as memRemoveEntry,
+  trackRecentFile,
+  buildWelcomeDigest,
+  buildMemoryContext,
+  type WorkspaceMemory,
+} from './memory.js'
+import { assessPlan } from './consequence.js'
+import {
+  createMission,
+  getMission,
+  listMissions,
+  updateMission,
+  deleteMission,
+  demoMissionPlan,
+  llmMissionPlan,
+  verifyOutcome,
+} from './mission.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -85,6 +108,8 @@ app.get('/api/file', async (req, res) => {
     const stat = await fs.stat(abs)
     if (!stat.isFile()) return res.status(400).json({ error: 'Not a file' })
     const content = await fs.readFile(abs, 'utf8')
+    // Track recent file in workspace memory (fire-and-forget)
+    trackRecentFile(WORKSPACE, rel).catch(() => {})
     res.json({ path: rel, content })
   } catch (e) {
     res.status(404).json({ error: (e as Error).message })
@@ -195,7 +220,7 @@ app.post('/api/index/rebuild', async (_req, res) => {
 })
 
 // ---------- chat / AI proxy (streaming) ----------
-function buildSystemPrompt(req: ChatRequest): string {
+async function buildSystemPrompt(req: ChatRequest): Promise<string> {
   const base =
     'You are Newton, an elite AI pair-programmer embedded in a code editor. ' +
     'Be concise, correct, and practical. Use Markdown. Use fenced code blocks with language tags. ' +
@@ -203,6 +228,21 @@ function buildSystemPrompt(req: ChatRequest): string {
     'When the user asks about the codebase, use the relevant code context provided below.'
 
   let context = base
+
+  // Inject workspace memory (tech stack, decisions, conventions)
+  try {
+    const mem = await loadMemory(WORKSPACE)
+    if (mem) {
+      const memCtx = buildMemoryContext(mem)
+      if (memCtx) {
+        context +=
+          `\n\n--- WORKSPACE MEMORY (project context) ---\n${memCtx}\n--- END MEMORY ---\n` +
+          'Follow the project conventions and decisions listed above when writing code.'
+      }
+    }
+  } catch {
+    /* memory is optional — ignore failures */
+  }
 
   // Inject active file context
   if (req.activeFile?.content) {
@@ -316,7 +356,7 @@ async function streamOpenai(
   signal: AbortSignal,
 ) {
   const baseUrl = (provider.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
-  const messages = [{ role: 'system', content: buildSystemPrompt(body) }, ...body.messages]
+  const messages = [{ role: 'system', content: await buildSystemPrompt(body) }, ...body.messages]
   const r = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -354,7 +394,7 @@ async function streamAnthropic(
   send: (c: string) => void,
   signal: AbortSignal,
 ) {
-  const sys = buildSystemPrompt(body)
+  const sys = await buildSystemPrompt(body)
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -400,7 +440,7 @@ async function streamOllama(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: provider.model,
-      messages: [{ role: 'system', content: buildSystemPrompt(body) }, ...body.messages],
+      messages: [{ role: 'system', content: await buildSystemPrompt(body) }, ...body.messages],
       stream: true,
     }),
     signal,
@@ -827,6 +867,700 @@ ${testCases}
 })
 `
 }
+
+// ---------- Git / source control ----------
+interface GitFileChange {
+  path: string
+  /** M = modified, A = added, D = deleted, R = renamed, U = untracked, C = conflict */
+  status: 'M' | 'A' | 'D' | 'R' | 'U' | 'C'
+  /** true if staged in the index */
+  staged: boolean
+  /** old path for renames */
+  oldPath?: string
+}
+
+interface GitStatus {
+  initialized: boolean
+  branch: string | null
+  ahead: number
+  behind: number
+  changes: GitFileChange[]
+  head: { hash: string; message: string; author: string; date: string } | null
+}
+
+/**
+ * Run a git command and return trimmed stdout. Returns empty string on failure
+ * (e.g. not a git repo).
+ */
+async function git(args: string[]): Promise<string> {
+  const { execFile } = await import('node:child_process')
+  return new Promise((resolve) => {
+    execFile(
+      'git',
+      args,
+      { cwd: WORKSPACE, maxBuffer: 5 * 1024 * 1024, timeout: 15000 },
+      (err, stdout) => {
+        if (err) resolve('')
+        else resolve(stdout.toString().trim())
+      },
+    )
+  })
+}
+
+app.get('/api/git/status', async (_req, res) => {
+  try {
+    const inRepo = await git(['rev-parse', '--is-inside-work-tree'])
+    if (inRepo !== 'true') {
+      const result: GitStatus = {
+        initialized: false,
+        branch: null,
+        ahead: 0,
+        behind: 0,
+        changes: [],
+        head: null,
+      }
+      return res.json(result)
+    }
+
+    const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])) || null
+    const porcelain = await git(['status', '--porcelain=v1', '-b', '--renames'])
+
+    // Parse "## main...origin/main [ahead 2]" header
+    let ahead = 0
+    let behind = 0
+    const changes: GitFileChange[] = []
+    for (const line of porcelain.split('\n').filter(Boolean)) {
+      if (line.startsWith('##')) {
+        const aheadM = line.match(/ahead (\d+)/)
+        const behindM = line.match(/behind (\d+)/)
+        if (aheadM) ahead = Number(aheadM[1])
+        if (behindM) behind = Number(behindM[1])
+        continue
+      }
+      // XY filename — X = index status, Y = worktree status
+      const x = line[0]
+      const y = line[1]
+      let rest = line.slice(3)
+      const isRenamed = x === 'R' || y === 'R'
+      let oldPath: string | undefined
+      let filePath = rest
+      if (isRenamed && rest.includes(' -> ')) {
+        const [o, n] = rest.split(' -> ')
+        oldPath = o
+        filePath = n
+      }
+      // staged if index status is non-empty and not untracked-space
+      const staged = x !== ' ' && x !== '?'
+      const statusChar = x !== ' ' && x !== '?' ? x : y === 'D' ? 'D' : y === 'A' || y === '?' ? 'U' : y
+      changes.push({
+        path: filePath,
+        status: statusChar as GitFileChange['status'],
+        staged,
+        oldPath,
+      })
+    }
+
+    // HEAD commit
+    let head: GitStatus['head'] = null
+    const headRaw = await git(['log', '-1', '--pretty=format:%H|%s|%an|%ci'])
+    if (headRaw) {
+      const [hash, message, author, date] = headRaw.split('|')
+      head = { hash: hash.slice(0, 7), message, author, date }
+    }
+
+    const result: GitStatus = {
+      initialized: true,
+      branch,
+      ahead,
+      behind,
+      changes,
+      head,
+    }
+    res.json(result)
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.get('/api/git/diff', async (req, res) => {
+  try {
+    const filePath = String(req.query.path ?? '')
+    const staged = req.query.staged === 'true'
+    const args = ['diff', '--no-color']
+    if (staged) args.push('--cached')
+    if (filePath) args.push('--', filePath)
+    const diff = await git(args)
+    res.json({ diff })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.post('/api/git/stage', async (req, res) => {
+  try {
+    const { paths } = req.body as { paths: string[] }
+    if (!paths || paths.length === 0) return res.json({ ok: true })
+    // Validate paths stay within workspace
+    for (const p of paths) safeJoin(p)
+    await git(['add', '--', ...paths])
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.post('/api/git/unstage', async (req, res) => {
+  try {
+    const { paths } = req.body as { paths: string[] }
+    if (!paths || paths.length === 0) return res.json({ ok: true })
+    for (const p of paths) safeJoin(p)
+    // Use reset HEAD to unstage
+    await git(['reset', 'HEAD', '--', ...paths])
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.post('/api/git/commit', async (req, res) => {
+  try {
+    const { message } = req.body as { message: string }
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: 'Commit message required' })
+    }
+    const out = await git(['commit', '-m', message.trim()])
+    res.json({ ok: true, output: out })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.get('/api/git/log', async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 30, 100)
+    const raw = await git([
+      'log',
+      `-${limit}`,
+      '--pretty=format:%H|%h|%s|%an|%ar',
+    ])
+    if (!raw) return res.json({ commits: [] })
+    const commits = raw.split('\n').map((line) => {
+      const [hash, short, message, author, date] = line.split('|')
+      return { hash, short, message, author, date }
+    })
+    res.json({ commits })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.post('/api/git/init', async (_req, res) => {
+  try {
+    await git(['init'])
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+// ---------- AI SCM: commit suggestion ----------
+app.post('/api/git/suggest-commit', async (req, res) => {
+  try {
+    const { diff, provider: p, forceDemo } = req.body as {
+      diff: string
+      provider: ProviderConfig
+      forceDemo?: boolean
+    }
+    if (!diff || !diff.trim()) {
+      return res.json({ message: 'chore: update files', note: 'No staged changes to analyze.' })
+    }
+
+    // Demo heuristic
+    if (p.provider === 'demo' || forceDemo) {
+      const message = demoCommitMessage(diff)
+      return res.json({ message, note: 'Demo heuristic commit message.' })
+    }
+
+    const system =
+      'You are an expert at writing concise conventional-commit messages. ' +
+      'Analyze the diff and return ONLY the commit message (no markdown, no code fence). ' +
+      'Format: type(scope): short description. Types: feat, fix, refactor, docs, test, chore, perf, style, ci, build.'
+    const user = `Here is the staged diff. Write a single conventional-commit message.\n\n\`\`\`diff\n${diff.slice(0, 8000)}\n\`\`\``
+
+    const message = await llmComplete(
+      p,
+      system,
+      user,
+      p.provider === 'openai'
+        ? 'https://api.openai.com/v1/chat/completions'
+        : p.provider === 'anthropic'
+        ? 'https://api.anthropic.com/v1/messages'
+        : `${(p.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/api/chat`,
+      (j: any) =>
+        j.choices?.[0]?.message?.content ??
+        (j.content ?? []).map((b: any) => b.text ?? '').join('') ??
+        j.message?.content ??
+        '',
+      p.provider === 'openai',
+      undefined,
+      p.provider === 'ollama',
+    )
+    res.json({ message: message.trim(), note: 'AI-generated commit message.' })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+// ---------- AI SCM: explain diff ----------
+app.post('/api/git/explain-diff', async (req, res) => {
+  try {
+    const { diff, path: filePath, provider: p, forceDemo } = req.body as {
+      diff: string
+      path?: string
+      provider: ProviderConfig
+      forceDemo?: boolean
+    }
+    if (!diff || !diff.trim()) {
+      return res.json({ explanation: 'No changes to explain.' })
+    }
+
+    // Demo heuristic
+    if (p.provider === 'demo' || forceDemo) {
+      return res.json({ explanation: demoExplainDiff(diff, filePath) })
+    }
+
+    const system =
+      'You are a senior code reviewer. Explain what the diff does in plain, concise language. ' +
+      'Use bullet points. Note the key changes, any potential risks, and the intent behind the change.'
+    const user = `Explain this diff${filePath ? ` for \`${filePath}\`` : ''}:\n\n\`\`\`diff\n${diff.slice(0, 10000)}\n\`\`\``
+
+    const explanation = await llmComplete(
+      p,
+      system,
+      user,
+      p.provider === 'openai'
+        ? 'https://api.openai.com/v1/chat/completions'
+        : p.provider === 'anthropic'
+        ? 'https://api.anthropic.com/v1/messages'
+        : `${(p.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/api/chat`,
+      (j: any) =>
+        j.choices?.[0]?.message?.content ??
+        (j.content ?? []).map((b: any) => b.text ?? '').join('') ??
+        j.message?.content ??
+        '',
+      p.provider === 'openai',
+      undefined,
+      p.provider === 'ollama',
+    )
+    res.json({ explanation: explanation.trim() })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+// ---------- AI SCM: code review ----------
+app.post('/api/git/review', async (req, res) => {
+  try {
+    const { diff, files, provider: p, forceDemo } = req.body as {
+      diff: string
+      files: string[]
+      provider: ProviderConfig
+      forceDemo?: boolean
+    }
+    if (!diff || !diff.trim()) {
+      return res.json({ findings: [], summary: 'No changes to review.', score: 100 })
+    }
+
+    // Demo heuristic
+    if (p.provider === 'demo' || forceDemo) {
+      const result = demoCodeReview(diff, files)
+      return res.json(result)
+    }
+
+    const system =
+      'You are a principal engineer doing a code review. ' +
+      'Analyze the diff for bugs, security issues, performance problems, and maintainability concerns. ' +
+      'Respond as STRICT JSON only (no markdown, no code fence). Schema:\n' +
+      '{\n  "findings": [\n    {\n      "severity": "critical"|"warning"|"info"|"praise",\n' +
+      '      "category": "bug"|"security"|"performance"|"maintainability"|"style",\n' +
+      '      "message": "string",\n      "file": "optional string",\n      "line": optional number\n    }\n  ],\n' +
+      '  "summary": "string",\n  "score": number\n}'
+    const user =
+      `Review this diff${files.length ? ` (files: ${files.join(', ')})` : ''}:\n\n\`\`\`diff\n${diff.slice(0, 12000)}\n\`\`\`\n\n` +
+      `Respond as JSON only.`
+
+    const raw = await llmComplete(
+      p,
+      system,
+      user,
+      p.provider === 'openai'
+        ? 'https://api.openai.com/v1/chat/completions'
+        : p.provider === 'anthropic'
+        ? 'https://api.anthropic.com/v1/messages'
+        : `${(p.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/api/chat`,
+      (j: any) =>
+        j.choices?.[0]?.message?.content ??
+        (j.content ?? []).map((b: any) => b.text ?? '').join('') ??
+        j.message?.content ??
+        '',
+      p.provider === 'openai',
+      undefined,
+      p.provider === 'ollama',
+    )
+
+    // Try to parse JSON from the response
+    let parsed: any
+    try {
+      // Strip markdown code fences if present
+      const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+      parsed = JSON.parse(cleaned)
+    } catch {
+      // If parsing fails, return the raw text as a single finding
+      return res.json({
+        findings: [{ severity: 'info', category: 'maintainability', message: raw.slice(0, 500) }],
+        summary: 'Review completed (unstructured).',
+        score: 80,
+      })
+    }
+
+    res.json({
+      findings: parsed.findings ?? [],
+      summary: parsed.summary ?? 'Review complete.',
+      score: typeof parsed.score === 'number' ? parsed.score : 80,
+    })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Demo heuristic: generate a conventional commit message from a diff. */
+function demoCommitMessage(diff: string): string {
+  const added = (diff.match(/^\+[^+]/gm) || []).length
+  const removed = (diff.match(/^-[^-]/gm) || []).length
+  const files = (diff.match(/^diff --git b\//gm) || []).length || 1
+  const fileNames = (diff.match(/\+\+\+ b\/(.+)/g) || [])
+    .map((s) => s.replace('+++ b/', ''))
+    .slice(0, 3)
+
+  // Detect type from file patterns
+  const allFiles = fileNames.join(' ')
+  let type = 'refactor'
+  if (/\.md$|README|CHANGELOG|docs\//.test(allFiles)) type = 'docs'
+  else if (/test|spec|\.test\.|\.spec\./.test(allFiles)) type = 'test'
+  else if (/package\.json|package-lock|Cargo\.toml|go\.mod|Dockerfile|\.ya?ml/.test(allFiles)) type = 'chore'
+  else if (/\.css|\.scss|\.less/.test(allFiles)) type = 'style'
+  else if (added > removed * 2) type = 'feat'
+  else if (removed > added * 2) type = 'fix'
+
+  const scope = fileNames[0]?.split('/')[0] ?? ''
+  const desc =
+    files === 1 && fileNames[0]
+      ? `update ${fileNames[0]}`
+      : `${added} additions, ${removed} deletions across ${files} file${files > 1 ? 's' : ''}`
+
+  return `${type}${scope ? `(${scope})` : ''}: ${desc}`
+}
+
+/** Demo heuristic: explain a diff in plain language. */
+function demoExplainDiff(diff: string, filePath?: string): string {
+  const added = (diff.match(/^\+[^+]/gm) || []).length
+  const removed = (diff.match(/^-[^-]/gm) || []).length
+  const fileNames = (diff.match(/\+\+\+ b\/(.+)/g) || [])
+    .map((s) => s.replace('+++ b/', ''))
+    .slice(0, 5)
+
+  const parts: string[] = []
+  parts.push(`**Summary:** This change ${added > removed ? 'adds' : 'modifies'} code in ${fileNames.length || 'the'} file(s).`)
+  parts.push('')
+  parts.push(`**Changes:**`)
+  parts.push(`- **+${added} lines added**, **-${removed} lines removed**`)
+  if (fileNames.length) {
+    parts.push(`- **Files affected:** ${fileNames.join(', ')}`)
+  }
+
+  // Look for common patterns
+  if (/async|await/.test(diff)) parts.push('- Involves **asynchronous** operations')
+  if (/import\s+|require\(/.test(diff)) parts.push('- Updates **imports / dependencies**')
+  if (/function|=>|def /.test(diff)) parts.push('- Modifies **function definitions**')
+  if (/TODO|FIXME|HACK/.test(diff)) parts.push('- Contains **TODO/FIXME** markers')
+  if (/password|secret|token|key/i.test(diff)) parts.push('- ⚠️ References **sensitive data** — review carefully')
+
+  parts.push('')
+  parts.push(`> 💡 *Connect a real AI provider in Settings for a detailed, intelligent explanation.*`)
+  return parts.join('\n')
+}
+
+/** Demo heuristic: basic code review. */
+function demoCodeReview(diff: string, files: string[]): import('../shared/types.js').CodeReviewResponse {
+  const findings: import('../shared/types.js').CodeReviewFinding[] = []
+  const lines = diff.split('\n')
+
+  for (const line of lines) {
+    if (!line.startsWith('+') || line.startsWith('+++')) continue
+
+    // Security checks
+    if (/password|secret|api[_-]?key|token/i.test(line) && /=|:/.test(line)) {
+      findings.push({
+        severity: 'critical',
+        category: 'security',
+        message: 'Possible hardcoded credential detected. Never commit secrets — use environment variables.',
+      })
+    }
+    if (/eval\(/.test(line)) {
+      findings.push({
+        severity: 'critical',
+        category: 'security',
+        message: 'Use of `eval()` is dangerous — it can execute arbitrary code.',
+      })
+    }
+
+    // Bug risk
+    if (/console\.log/.test(line)) {
+      findings.push({
+        severity: 'info',
+        category: 'style',
+        message: 'Debug `console.log` found — consider removing before production.',
+      })
+    }
+    if (/==[^=]/.test(line) && !/===/.test(line)) {
+      findings.push({
+        severity: 'warning',
+        category: 'bug',
+        message: 'Loose equality (`==`) can cause unexpected type coercion — use `===`.',
+      })
+    }
+  }
+
+  // Praise for tests
+  if (files.some((f) => /test|spec/i.test(f))) {
+    findings.push({
+      severity: 'praise',
+      category: 'maintainability',
+      message: 'Great work adding tests! 🎉',
+    })
+  }
+
+  if (findings.length === 0) {
+    findings.push({
+      severity: 'praise',
+      category: 'maintainability',
+      message: 'No obvious issues detected by heuristic review.',
+    })
+  }
+
+  const criticalCount = findings.filter((f) => f.severity === 'critical').length
+  const warningCount = findings.filter((f) => f.severity === 'warning').length
+  const score = Math.max(0, 100 - criticalCount * 25 - warningCount * 10)
+
+  return {
+    findings,
+    summary: `${criticalCount} critical, ${warningCount} warnings, ${findings.length} total findings.`,
+    score,
+  }
+}
+
+// ---------- Repository dependency graph ----------
+app.get('/api/graph', async (req, res) => {
+  try {
+    const force = req.query.force === 'true'
+    const builder = getGraphBuilder(WORKSPACE)
+    const { parsed, cached, total } = await builder.build(Boolean(force))
+    const graph = builder.getGraph()
+    if (!graph) return res.status(500).json({ error: 'Graph build failed' })
+
+    // If the graph is huge, slim it down for the API response (drop symbol lists
+    // from nodes unless requested — the viz only needs connectivity + labels)
+    const includeSymbols = req.query.symbols === 'true'
+    const slimNodes: Record<string, any> = {}
+    for (const [id, node] of Object.entries(graph.nodes)) {
+      slimNodes[id] = {
+        id: node.id,
+        path: node.path,
+        language: node.language,
+        lineCount: node.lineCount,
+        symbolCount: node.symbols.length,
+        imports: node.imports,
+        externalDeps: node.externalDeps,
+        ...(includeSymbols ? { symbols: node.symbols } : {}),
+      }
+    }
+
+    res.json({
+      ...graph,
+      nodes: slimNodes,
+      buildStats: { parsed, cached, total },
+    })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.get('/api/graph/impact', async (req, res) => {
+  try {
+    const file = String(req.query.file ?? '')
+    if (!file) return res.status(400).json({ error: 'file parameter required' })
+
+    const builder = getGraphBuilder(WORKSPACE)
+    await builder.build()
+    const result = builder.impactAnalysis(file)
+
+    // Enrich impacted file IDs with metadata
+    const graph = builder.getGraph()
+    const impacted = result.impacted.map((id) => ({
+      id,
+      path: graph?.nodes[id]?.path ?? id,
+      language: graph?.nodes[id]?.language,
+    }))
+
+    res.json({ file, ...result, impacted })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+// ---------- RecourseOS: Consequence Engine ----------
+/**
+ * Assess a plan's risk before execution. Returns a ConsequenceReport that
+ * the UI uses to gate behind approval confirmations.
+ */
+app.post('/api/agent/assess', async (req, res) => {
+  try {
+    const { steps } = req.body as { steps: import('../shared/types.js').AgentStep[] }
+    if (!Array.isArray(steps)) return res.status(400).json({ error: 'steps array required' })
+
+    // Try to enrich blast radius from the repo graph
+    let edges: Array<{ source: string; target: string }> | undefined
+    try {
+      const builder = getGraphBuilder(WORKSPACE)
+      await builder.build()
+      const graph = builder.getGraph()
+      if (graph) edges = graph.edges
+    } catch {
+      /* graph is optional enrichment */
+    }
+
+    const report = assessPlan(steps, { dependencyEdges: edges })
+    res.json(report)
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+// ---------- Mission Control ----------
+/** Create + plan a new mission. */
+app.post('/api/missions', async (req, res) => {
+  try {
+    const { goal, contextFiles, provider } = req.body as {
+      goal: string
+      contextFiles?: string[]
+      provider?: ProviderConfig
+    }
+    if (!goal || !goal.trim()) return res.status(400).json({ error: 'goal required' })
+
+    const mission = createMission(goal.trim(), contextFiles ?? [])
+
+    // Plan the mission
+    const p = provider ?? { provider: 'demo', model: 'demo' }
+    let plan: { steps: import('../shared/types.js').MissionStep[]; outcomes: import('../shared/types.js').MissionOutcome[]; summary: string }
+
+    if (p.provider === 'demo') {
+      plan = demoMissionPlan(goal.trim())
+    } else {
+      try {
+        const complete = (sys: string, user: string) =>
+          llmComplete(
+            p,
+            sys,
+            user,
+            p.provider === 'openai'
+              ? 'https://api.openai.com/v1/chat/completions'
+              : p.provider === 'anthropic'
+              ? 'https://api.anthropic.com/v1/messages'
+              : `${(p.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/api/chat`,
+            (j: any) =>
+              j.choices?.[0]?.message?.content ??
+              (j.content ?? []).map((b: any) => b.text ?? '').join('') ??
+              j.message?.content ??
+              '',
+            p.provider === 'openai',
+            undefined,
+            p.provider === 'ollama',
+          )
+        plan = await llmMissionPlan(goal.trim(), contextFiles ?? [], complete)
+      } catch (e) {
+        // fall back to demo plan
+        plan = demoMissionPlan(goal.trim())
+        plan.summary += ` (LLM planning failed: ${(e as Error).message}; using heuristic fallback.)`
+      }
+    }
+
+    const updated = updateMission(mission.id, {
+      steps: plan.steps,
+      outcomes: plan.outcomes,
+      summary: plan.summary,
+      status: 'running',
+      phase: 'execute',
+    })
+    res.json(updated)
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** List all missions. */
+app.get('/api/missions', (_req, res) => {
+  res.json(listMissions())
+})
+
+/** Get a single mission. */
+app.get('/api/missions/:id', (req, res) => {
+  const m = getMission(req.params.id)
+  if (!m) return res.status(404).json({ error: 'not found' })
+  res.json(m)
+})
+
+/** Update a mission (e.g. mark steps done, pause, cancel). */
+app.patch('/api/missions/:id', (req, res) => {
+  try {
+    const updated = updateMission(req.params.id, req.body as Partial<import('../shared/types.js').Mission>)
+    if (!updated) return res.status(404).json({ error: 'not found' })
+    res.json(updated)
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Delete a mission. */
+app.delete('/api/missions/:id', (req, res) => {
+  const ok = deleteMission(req.params.id)
+  if (!ok) return res.status(404).json({ error: 'not found' })
+  res.json({ ok: true })
+})
+
+/** Verify a mission's outcomes (run build/tests/lint). */
+app.post('/api/missions/:id/verify', async (req, res) => {
+  try {
+    const mission = getMission(req.params.id)
+    if (!mission) return res.status(404).json({ error: 'not found' })
+
+    const results = await Promise.all(
+      mission.outcomes.map(async (o) => {
+        const r = await verifyOutcome(o)
+        return { ...o, actual: r.actual, passed: r.passed }
+      }),
+    )
+
+    const allPassed = results.every((o) => o.passed)
+    const updated = updateMission(mission.id, {
+      outcomes: results,
+      phase: 'report',
+      status: allPassed ? 'done' : 'failed',
+    })
+    res.json(updated)
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
 
 // ---------- health ----------
 app.get('/api/health', (_req, res) => {
