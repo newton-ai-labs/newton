@@ -3,7 +3,7 @@
   "graph": {
     "version": 1,
     "root": "/Users/jessiehermosillo/BetterThanCursor",
-    "builtAt": "2026-06-24T16:58:18.944Z",
+    "builtAt": "2026-06-24T17:34:18.871Z",
     "nodes": {
       "server/agent.ts": {
         "id": "server/agent.ts",
@@ -401,7 +401,7 @@
         "id": "server/index.ts",
         "path": "server/index.ts",
         "language": "typescript",
-        "lineCount": 1548,
+        "lineCount": 1650,
         "symbols": [
           {
             "name": "resolveWorkspace",
@@ -422,100 +422,118 @@
             "line": 83
           },
           {
+            "name": "GrepResult",
+            "kind": "interface",
+            "exported": false,
+            "line": 224
+          },
+          {
+            "name": "walkAndGrep",
+            "kind": "function",
+            "exported": false,
+            "line": 266
+          },
+          {
+            "name": "isSkippableFile",
+            "kind": "function",
+            "exported": false,
+            "line": 309
+          },
+          {
             "name": "buildSystemPrompt",
             "kind": "function",
             "exported": false,
-            "line": 224
+            "line": 326
           },
           {
             "name": "fallbackNoKey",
             "kind": "function",
             "exported": false,
-            "line": 345
+            "line": 447
           },
           {
             "name": "streamOpenAiCompat",
             "kind": "function",
             "exported": false,
-            "line": 358
+            "line": 460
           },
           {
             "name": "streamAnthropic",
             "kind": "function",
             "exported": false,
-            "line": 404
+            "line": 506
           },
           {
             "name": "streamOllama",
             "kind": "function",
             "exported": false,
-            "line": 444
+            "line": 546
           },
           {
             "name": "readSSE",
             "kind": "function",
             "exported": false,
-            "line": 478
+            "line": 580
           },
           {
             "name": "llmComplete",
             "kind": "function",
             "exported": false,
-            "line": 536
+            "line": 638
           },
           {
             "name": "demoComposer",
             "kind": "function",
             "exported": false,
-            "line": 685
+            "line": 787
           },
           {
             "name": "demoNlsh",
             "kind": "function",
             "exported": false,
-            "line": 772
+            "line": 874
           },
           {
             "name": "demoTests",
             "kind": "function",
             "exported": false,
-            "line": 864
+            "line": 966
           },
           {
             "name": "GitFileChange",
             "kind": "interface",
             "exported": false,
-            "line": 899
+            "line": 1001
           },
           {
             "name": "GitStatus",
             "kind": "interface",
             "exported": false,
-            "line": 909
+            "line": 1011
           },
           {
             "name": "git",
             "kind": "function",
             "exported": false,
-            "line": 922
+            "line": 1024
           },
           {
             "name": "demoCommitMessage",
             "kind": "function",
             "exported": false,
-            "line": 1213
+            "line": 1315
           },
           {
             "name": "demoExplainDiff",
             "kind": "function",
             "exported": false,
-            "line": 1241
+            "line": 1343
           },
           {
             "name": "demoCodeReview",
             "kind": "function",
             "exported": false,
-            "line": 1270
+            "line": 1372
           }
         ],
         "rawImports": [
@@ -1246,19 +1264,13 @@
         "id": "src/App.tsx",
         "path": "src/App.tsx",
         "language": "typescript",
-        "lineCount": 561,
+        "lineCount": 390,
         "symbols": [
           {
             "name": "App",
             "kind": "function",
             "exported": true,
-            "line": 34
-          },
-          {
-            "name": "SearchView",
-            "kind": "function",
-            "exported": false,
-            "line": 387
+            "line": 35
           }
         ],
         "rawImports": [
@@ -1277,6 +1289,7 @@
           "./components/GraphPanel",
           "./components/MemoryPanel",
           "./components/MissionPanel",
+          "./components/SearchPanel",
           "./components/Composer"
         ],
         "imports": [
@@ -1292,12 +1305,61 @@
           "src/components/GraphPanel.tsx",
           "src/components/MemoryPanel.tsx",
           "src/components/MissionPanel.tsx",
+          "src/components/SearchPanel.tsx",
           "src/components/Composer.tsx"
         ],
         "externalDeps": [
           "react",
           "react-resizable-panels",
           "lucide-react"
+        ]
+      },
+      "src/codeLens.ts": {
+        "id": "src/codeLens.ts",
+        "path": "src/codeLens.ts",
+        "language": "typescript",
+        "lineCount": 160,
+        "symbols": [
+          {
+            "name": "DetectedSymbol",
+            "kind": "interface",
+            "exported": true,
+            "line": 6
+          },
+          {
+            "name": "CodeLensAction",
+            "kind": "type",
+            "exported": true,
+            "line": 13
+          },
+          {
+            "name": "extractName",
+            "kind": "function",
+            "exported": false,
+            "line": 28
+          },
+          {
+            "name": "detectSymbols",
+            "kind": "function",
+            "exported": true,
+            "line": 51
+          },
+          {
+            "name": "setupCodeLens",
+            "kind": "function",
+            "exported": true,
+            "line": 77
+          }
+        ],
+        "rawImports": [
+          "monaco-editor",
+          "./monacoTypes"
+        ],
+        "imports": [
+          "src/monacoTypes.ts"
+        ],
+        "externalDeps": [
+          "monaco-editor"
         ]
       },
       "src/components/AgentPanel.tsx": {
@@ -1471,25 +1533,31 @@
         "id": "src/components/EditorArea.tsx",
         "path": "src/components/EditorArea.tsx",
         "language": "typescript",
-        "lineCount": 231,
+        "lineCount": 265,
         "symbols": [
           {
             "name": "EditorArea",
             "kind": "function",
             "exported": true,
-            "line": 11
+            "line": 12
+          },
+          {
+            "name": "Breadcrumb",
+            "kind": "function",
+            "exported": false,
+            "line": 74
           },
           {
             "name": "Tab",
             "kind": "function",
             "exported": false,
-            "line": 73
+            "line": 88
           },
           {
             "name": "CodeView",
             "kind": "function",
             "exported": false,
-            "line": 104
+            "line": 119
           }
         ],
         "rawImports": [
@@ -1500,13 +1568,15 @@
           "../store",
           "./fileIcons",
           "./InlineEditWidget",
-          "../ghostCompletions"
+          "../ghostCompletions",
+          "../codeLens"
         ],
         "imports": [
           "src/store.ts",
           "src/components/fileIcons.tsx",
           "src/components/InlineEditWidget.tsx",
-          "src/ghostCompletions.ts"
+          "src/ghostCompletions.ts",
+          "src/codeLens.ts"
         ],
         "externalDeps": [
           "react",
@@ -1724,6 +1794,64 @@
         "imports": [
           "src/store.ts",
           "shared/types.ts"
+        ],
+        "externalDeps": [
+          "react",
+          "lucide-react"
+        ]
+      },
+      "src/components/SearchPanel.tsx": {
+        "id": "src/components/SearchPanel.tsx",
+        "path": "src/components/SearchPanel.tsx",
+        "language": "typescript",
+        "lineCount": 320,
+        "symbols": [
+          {
+            "name": "SearchResult",
+            "kind": "interface",
+            "exported": false,
+            "line": 16
+          },
+          {
+            "name": "SearchPanel",
+            "kind": "function",
+            "exported": true,
+            "line": 24
+          },
+          {
+            "name": "escapeRegex",
+            "kind": "function",
+            "exported": false,
+            "line": 282
+          },
+          {
+            "name": "groupByFile",
+            "kind": "function",
+            "exported": false,
+            "line": 286
+          },
+          {
+            "name": "highlight",
+            "kind": "function",
+            "exported": false,
+            "line": 295
+          },
+          {
+            "name": "escapeHtml",
+            "kind": "function",
+            "exported": false,
+            "line": 313
+          }
+        ],
+        "rawImports": [
+          "react",
+          "lucide-react",
+          "../store",
+          "./fileIcons"
+        ],
+        "imports": [
+          "src/store.ts",
+          "src/components/fileIcons.tsx"
         ],
         "externalDeps": [
           "react",
@@ -1998,6 +2126,27 @@
           "react-dom"
         ]
       },
+      "src/monacoTypes.ts": {
+        "id": "src/monacoTypes.ts",
+        "path": "src/monacoTypes.ts",
+        "language": "typescript",
+        "lineCount": 4,
+        "symbols": [
+          {
+            "name": "Monaco",
+            "kind": "type",
+            "exported": true,
+            "line": 4
+          }
+        ],
+        "rawImports": [
+          "monaco-editor"
+        ],
+        "imports": [],
+        "externalDeps": [
+          "monaco-editor"
+        ]
+      },
       "src/store.ts": {
         "id": "src/store.ts",
         "path": "src/store.ts",
@@ -2249,7 +2398,17 @@
       },
       {
         "source": "src/App.tsx",
+        "target": "src/components/SearchPanel.tsx",
+        "symbols": []
+      },
+      {
+        "source": "src/App.tsx",
         "target": "src/components/Composer.tsx",
+        "symbols": []
+      },
+      {
+        "source": "src/codeLens.ts",
+        "target": "src/monacoTypes.ts",
         "symbols": []
       },
       {
@@ -2313,6 +2472,11 @@
         "symbols": []
       },
       {
+        "source": "src/components/EditorArea.tsx",
+        "target": "src/codeLens.ts",
+        "symbols": []
+      },
+      {
         "source": "src/components/FileExplorer.tsx",
         "target": "src/store.ts",
         "symbols": []
@@ -2355,6 +2519,16 @@
       {
         "source": "src/components/MissionPanel.tsx",
         "target": "shared/types.ts",
+        "symbols": []
+      },
+      {
+        "source": "src/components/SearchPanel.tsx",
+        "target": "src/store.ts",
+        "symbols": []
+      },
+      {
+        "source": "src/components/SearchPanel.tsx",
+        "target": "src/components/fileIcons.tsx",
         "symbols": []
       },
       {
@@ -2406,6 +2580,7 @@
         "src/components/InlineEditWidget.tsx",
         "src/components/MemoryPanel.tsx",
         "src/components/MissionPanel.tsx",
+        "src/components/SearchPanel.tsx",
         "src/components/SettingsModal.tsx",
         "src/components/SourceControlPanel.tsx",
         "src/components/TerminalPanel.tsx",
@@ -2444,8 +2619,14 @@
       "src/components/MissionPanel.tsx": [
         "src/App.tsx"
       ],
+      "src/components/SearchPanel.tsx": [
+        "src/App.tsx"
+      ],
       "src/components/Composer.tsx": [
         "src/App.tsx"
+      ],
+      "src/monacoTypes.ts": [
+        "src/codeLens.ts"
       ],
       "shared/types.ts": [
         "src/components/AgentPanel.tsx",
@@ -2462,7 +2643,8 @@
       ],
       "src/components/fileIcons.tsx": [
         "src/components/EditorArea.tsx",
-        "src/components/FileExplorer.tsx"
+        "src/components/FileExplorer.tsx",
+        "src/components/SearchPanel.tsx"
       ],
       "src/components/InlineEditWidget.tsx": [
         "src/components/EditorArea.tsx"
@@ -2470,17 +2652,20 @@
       "src/ghostCompletions.ts": [
         "src/components/EditorArea.tsx"
       ],
+      "src/codeLens.ts": [
+        "src/components/EditorArea.tsx"
+      ],
       "src/App.tsx": [
         "src/main.tsx"
       ]
     },
     "stats": {
-      "fileCount": 33,
-      "symbolCount": 247,
-      "edgeCount": 41,
+      "fileCount": 36,
+      "symbolCount": 262,
+      "edgeCount": 46,
       "externalDepCount": 25,
       "languages": {
-        "typescript": 32,
+        "typescript": 35,
         "javascript": 1
       }
     }
@@ -2488,16 +2673,16 @@
   "mtimes": {
     "server/agent.ts": 1782303086249.7732,
     "server/demoAi.ts": 1782316770405.3591,
-    "server/index.ts": 1782319700221.4194,
+    "server/index.ts": 1782321412017.461,
     "server/indexing.ts": 1782308216498.0393,
     "server/memory.ts": 1782312042983.5276,
     "server/repoGraph.ts": 1782311634477.6956,
     "shared/types.ts": 1782319669908.572,
-    "src/App.tsx": 1782319826827.0962,
+    "src/App.tsx": 1782321512003.856,
     "src/components/AgentPanel.tsx": 1782318506467.9978,
     "src/components/ChatPanel.tsx": 1782316109241.3164,
     "src/components/CommandPalette.tsx": 1782319861556.1123,
-    "src/components/EditorArea.tsx": 1782302876326.7422,
+    "src/components/EditorArea.tsx": 1782321076150.8254,
     "src/components/FileExplorer.tsx": 1782300996400.9326,
     "src/components/GraphPanel.tsx": 1782311858641.1914,
     "src/components/InlineEditWidget.tsx": 1782302533945.3918,
@@ -2518,6 +2703,9 @@
     "server/mission.ts": 1782313071767.0898,
     "src/components/MissionPanel.tsx": 1782314238801.7139,
     "src/utils/debounce.ts": 1782316553793.936,
-    "src/components/Composer.tsx": 1782319793678.5176
+    "src/components/Composer.tsx": 1782319793678.5176,
+    "src/codeLens.ts": 1782321003484.2993,
+    "src/components/SearchPanel.tsx": 1782321340716.3718,
+    "src/monacoTypes.ts": 1782321018381.69
   }
 }
