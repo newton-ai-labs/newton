@@ -104,6 +104,10 @@ interface NewtonState {
   voiceOpen: boolean
   setVoiceOpen: (v: boolean) => void
 
+  // composer (multi-file AI editing)
+  composerOpen: boolean
+  setComposerOpen: (v: boolean) => void
+
   // NL shell terminal
   terminalOpen: boolean
   setTerminalOpen: (v: boolean) => void
@@ -618,6 +622,9 @@ export const useStore = create<NewtonState>((set, get) => ({
   // voice coding
   voiceOpen: false,
   setVoiceOpen: (v) => set({ voiceOpen: v }),
+
+  composerOpen: false,
+  setComposerOpen: (v) => set({ composerOpen: v }),
 
   // NL shell terminal
   terminalOpen: false,

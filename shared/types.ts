@@ -352,6 +352,31 @@ export function migrateSettings(raw: Record<string, any>): Settings {
   }
 }
 
+// ---------- Composer (multi-file editing) ----------
+export interface ComposerRequest {
+  instruction: string
+  provider: ProviderConfig
+  /** files included as context */
+  files: { path: string; content: string }[]
+  forceDemo?: boolean
+}
+
+export interface ComposerFileChange {
+  path: string
+  /** original content (empty if creating) */
+  before: string
+  /** proposed new content */
+  after: string
+  /** one-line summary of what changed */
+  description: string
+  status: 'pending' | 'accepted' | 'rejected' | 'applied'
+}
+
+export interface ComposerResponse {
+  changes: ComposerFileChange[]
+  summary: string
+}
+
 // ---------- AI SCM ----------
 
 export interface CommitSuggestionRequest {

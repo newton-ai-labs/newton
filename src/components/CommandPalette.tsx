@@ -8,6 +8,7 @@ import {
   PanelLeft,
   PanelRight,
   Plus,
+  Wand2,
 } from 'lucide-react'
 import { useStore } from '../store'
 import type { FileNode } from '../../shared/types'
@@ -34,6 +35,7 @@ export default function CommandPalette() {
   const chatVisible = useStore((s) => s.chatVisible)
   const createFile = useStore((s) => s.createFile)
   const sendMessage = useStore((s) => s.sendMessage)
+  const setComposerOpen = useStore((s) => s.setComposerOpen)
 
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
@@ -95,8 +97,16 @@ export default function CommandPalette() {
         run: () => sendMessage('Review this file for bugs and suggest improvements'),
         group: 'Commands',
       },
+      {
+        id: 'composer',
+        label: 'Composer: Multi-file Edit',
+        hint: '⌘I',
+        icon: Wand2,
+        run: () => setComposerOpen(true),
+        group: 'Commands',
+      },
     ],
-    [saveActiveTab, setSettingsOpen, setSidebarVisible, setChatVisible, sidebarVisible, chatVisible, sendMessage],
+    [saveActiveTab, setSettingsOpen, setSidebarVisible, setChatVisible, sidebarVisible, chatVisible, sendMessage, setComposerOpen],
   )
 
   const results = useMemo(() => {

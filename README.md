@@ -57,6 +57,12 @@ Works out-of-the-box in **Demo mode** (no API key needed), and supports **10 LLM
 - Highlight code, press `⌘K`, describe a change
 - Review the diff and accept/reject
 
+### 🪄 Composer (`⌘I`) — *Innovation*
+- **Multi-file AI editing** — describe a change that spans multiple files at once
+- Auto-includes your active file + open tabs as context (add more via "Add file")
+- Newton proposes per-file diffs with **per-file accept/reject** or **Accept All**
+- Great for refactors: "extract validation into a util and update all call sites"
+
 ### 🎤 Voice Coding (`⌘⇧V`) — *Innovation*
 - Speak instructions using the Web Speech API
 - Three modes: **Chat**, **Edit**, **Command**
@@ -112,6 +118,7 @@ Works out-of-the-box in **Demo mode** (no API key needed), and supports **10 LLM
 | `⌘B` | Toggle sidebar |
 | `⌘J` | Toggle AI panel |
 | `⌘K` | Inline AI edit (highlight code first) |
+| `⌘I` | Composer (multi-file AI edit) |
 | `⌘,` | Settings |
 | `⌃\`` | Toggle terminal |
 | `⌘⇧V` | Voice coding |
@@ -210,6 +217,7 @@ server (Express + tsx)
   ├── /api/search        — semantic codebase search (TF-IDF)
   ├── /api/index/*       — indexer stats / rebuild
   ├── /api/edit          — inline AI edit (⌘K)
+  ├── /api/composer      — multi-file AI edit (⌘I)
   ├── /api/copilot       — ghost-text completion
   ├── /api/agent/*       — plan + assess + apply agent steps
   ├── /api/agent/assess  — Consequence Engine risk assessment

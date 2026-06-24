@@ -29,6 +29,7 @@ import SourceControlPanel from './components/SourceControlPanel'
 import GraphPanel from './components/GraphPanel'
 import MemoryPanel from './components/MemoryPanel'
 import MissionPanel from './components/MissionPanel'
+import Composer from './components/Composer'
 
 export default function App() {
   const refreshTree = useStore((s) => s.refreshTree)
@@ -47,6 +48,7 @@ export default function App() {
   const terminalOpen = useStore((s) => s.terminalOpen)
   const setTerminalOpen = useStore((s) => s.setTerminalOpen)
   const setVoiceOpen = useStore((s) => s.setVoiceOpen)
+  const setComposerOpen = useStore((s) => s.setComposerOpen)
   const generateTests = useStore((s) => s.generateTests)
   const genTestsBusy = useStore((s) => s.genTestsBusy)
   const gitStatus = useStore((s) => s.gitStatus)
@@ -97,6 +99,9 @@ export default function App() {
       } else if (mod && e.shiftKey && e.key === 't') {
         e.preventDefault()
         generateTests()
+      } else if (mod && e.key === 'i') {
+        e.preventDefault()
+        setComposerOpen(true)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -112,6 +117,7 @@ export default function App() {
     setTerminalOpen,
     setVoiceOpen,
     generateTests,
+    setComposerOpen,
   ])
 
   const dirty = activeTab && activeTab.content !== activeTab.savedContent
@@ -373,15 +379,21 @@ export default function App() {
       <SettingsModal />
       <CommandPalette />
       <VoicePanel />
+      <Composer />
     </div>
   )
 }
 
 function SearchView() {
   const tree = useStore((s) => s.tree)
+  const openFile = useStore((s) => s.openFile)
   const [q, setQ] = useState('')
+  const [mode, setMode] = useState<'semantic' | 'files'>('semantic')
+  const [semanticResults, setSemanticResults] = useState<any[]>([])
+  const [searching, setSearching] = useState(false)
 
-  const results = useMemo(() => {
+  // Filename results (instant, client-side)
+  const fileResults = useMemo(() => {
     if (!q.trim() || !tree) return [] as { path: string; name: string }[]
     const out: { path: string; name: string }[] = []
     const walk = (n: any) => {
@@ -394,17 +406,58 @@ function SearchView() {
     return out.slice(0, 50)
   }, [q, tree])
 
-  const openFile = useStore((s) => s.openFile)
+  // Semantic results (debounced, server-side TF-IDF)
+  useEffect(() => {
+    if (mode !== 'semantic' || !q.trim()) {
+      setSemanticResults([])
+      return
+    }
+    setSearching(true)
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `${import.meta.env.VITE_API_BASE || ''}/api/search?q=${encodeURIComponent(q)}&limit=15`,
+        )
+        if (res.ok) {
+          const data = await res.json()
+          setSemanticResults(data.hits || [])
+        }
+      } catch {
+        /* ignore */
+      } finally {
+        setSearching(false)
+      }
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [q, mode])
 
   return (
     <div className="sidebar">
       <div className="sidebar-header">
         <span>Search</span>
+        <div style={{ display: 'flex', gap: 2 }}>
+          <button
+            className={`mini-btn ${mode === 'semantic' ? 'active' : ''}`}
+            style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4 }}
+            onClick={() => setMode('semantic')}
+            title="Semantic code search (TF-IDF)"
+          >
+            Code
+          </button>
+          <button
+            className={`mini-btn ${mode === 'files' ? 'active' : ''}`}
+            style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4 }}
+            onClick={() => setMode('files')}
+            title="Search by filename"
+          >
+            Files
+          </button>
+        </div>
       </div>
       <div style={{ padding: 8 }}>
         <input
           className="input"
-          placeholder="Search files by name…"
+          placeholder={mode === 'semantic' ? 'Search code semantically…' : 'Search files by name…'}
           value={q}
           onChange={(e) => setQ(e.target.value)}
           autoFocus
@@ -413,25 +466,94 @@ function SearchView() {
       <div className="file-tree">
         {q.trim() === '' && (
           <div style={{ color: 'var(--text-faint)', fontSize: 12.5, padding: 8 }}>
-            Type to search files. Use ⌘P for the command palette.
+            {mode === 'semantic'
+              ? '🔍 Semantic search finds code by meaning — try "where is auth handled?" or "database connection"'
+              : 'Type to search files. Use ⌘P for the command palette.'}
           </div>
         )}
-        {q.trim() !== '' && results.length === 0 && (
+
+        {/* Semantic results */}
+        {mode === 'semantic' && q.trim() !== '' && (
+          <>
+            {searching && (
+              <div style={{ color: 'var(--text-faint)', fontSize: 12, padding: '8px 12px' }}>
+                Searching codebase…
+              </div>
+            )}
+            {!searching && semanticResults.length === 0 && (
+              <div style={{ color: 'var(--text-faint)', fontSize: 12.5, padding: 8 }}>
+                No code matches. Try different keywords.
+              </div>
+            )}
+            {semanticResults.map((hit, i) => (
+              <div
+                key={`${hit.filePath}-${i}`}
+                className="search-result"
+                onClick={() => openFile(hit.filePath)}
+                title={hit.filePath}
+                style={{ cursor: 'pointer', padding: '6px 10px', borderBottom: '1px solid var(--border)' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                  <span
+                    style={{
+                      fontSize: 9.5,
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      color: 'var(--blue)',
+                      background: 'color-mix(in srgb, var(--blue) 14%, transparent)',
+                      padding: '1px 5px',
+                      borderRadius: 3,
+                    }}
+                  >
+                    {hit.kind || 'code'}
+                  </span>
+                  <span style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text)' }}>
+                    {hit.symbol || hit.filePath.split('/').pop()}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-faint)', marginBottom: 3 }}>
+                  {hit.filePath}:{hit.startLine}-{hit.endLine}
+                </div>
+                <pre
+                  style={{
+                    fontSize: 10.5,
+                    color: 'var(--text-dim)',
+                    background: 'var(--bg-elevated)',
+                    padding: '4px 6px',
+                    borderRadius: 4,
+                    overflow: 'hidden',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    maxHeight: 48,
+                    margin: 0,
+                    fontFamily: 'var(--font-mono)',
+                  }}
+                >
+                  {hit.snippet}
+                </pre>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* File results */}
+        {mode === 'files' && q.trim() !== '' && fileResults.length === 0 && (
           <div style={{ color: 'var(--text-faint)', fontSize: 12.5, padding: 8 }}>
             No files found.
           </div>
         )}
-        {results.map((r) => (
-          <div
-            key={r.path}
-            className="tree-row"
-            onClick={() => openFile(r.path)}
-            title={r.path}
-          >
-            <span style={{ paddingLeft: 22 }} />
-            <span className="name" style={{ fontSize: 12.5 }}>{r.path}</span>
-          </div>
-        ))}
+        {mode === 'files' &&
+          fileResults.map((r) => (
+            <div
+              key={r.path}
+              className="tree-row"
+              onClick={() => openFile(r.path)}
+              title={r.path}
+            >
+              <span style={{ paddingLeft: 22 }} />
+              <span className="name" style={{ fontSize: 12.5 }}>{r.path}</span>
+            </div>
+          ))}
       </div>
     </div>
   )

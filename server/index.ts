@@ -615,6 +615,128 @@ app.post('/api/agent/step', async (req, res) => {
   }
 })
 
+// ---------- Composer (multi-file AI editing) ----------
+app.post('/api/composer', async (req, res) => {
+  try {
+    const body = req.body as import('../shared/types.js').ComposerRequest
+    const provider = body.provider ?? { provider: 'demo', model: 'demo' }
+
+    // --- Demo mode: heuristic multi-file edits ---
+    if (provider.provider === 'demo' || body.forceDemo) {
+      const changes = demoComposer(body)
+      return res.json({ changes, summary: `Demo composer: ${changes.length} file change(s) proposed.` })
+    }
+
+    // --- Real provider: ask the LLM for a structured response ---
+    const sys =
+      'You are an expert multi-file code editor. Given an instruction and multiple files, ' +
+      'you produce the EXACT final content for each file that needs changes. ' +
+      'Return a JSON array of objects with {path, content, description}. ' +
+      'Each "content" must be the COMPLETE file content (not a diff). ' +
+      'Only include files that need changes. Return ONLY the JSON array — no markdown, no explanation.'
+
+    const filesBlock = body.files
+      .map((f) => `--- FILE: ${f.path} ---\n${f.content}`)
+      .join('\n\n')
+
+    const user = `Instruction: ${body.instruction}\n\nFiles:\n${filesBlock}\n\nReturn the JSON array of changed files now.`
+
+    let raw = await llmComplete(provider, sys, user)
+    // Strip markdown fences
+    raw = raw.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim()
+
+    let parsed: any[]
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      // Try to extract JSON array from response
+      const m = raw.match(/\[[\s\S]*\]/)
+      if (m) {
+        parsed = JSON.parse(m[0])
+      } else {
+        throw new Error('LLM did not return valid JSON')
+      }
+    }
+
+    const beforeMap = new Map(body.files.map((f) => [f.path, f.content]))
+    const changes = (parsed as any[]).map((entry) => ({
+      path: String(entry.path),
+      before: beforeMap.get(String(entry.path)) ?? '',
+      after: String(entry.content),
+      description: String(entry.description ?? 'Updated'),
+      status: 'pending' as const,
+    }))
+
+    res.json({
+      changes,
+      summary: `${changes.length} file change(s) proposed by ${provider.provider}.`,
+    })
+  } catch (e) {
+    // Fall back to demo
+    const changes = demoComposer(req.body)
+    res.json({
+      changes,
+      summary: `LLM failed (${(e as Error).message}); demo heuristic applied: ${changes.length} change(s).`,
+    })
+  }
+})
+
+/** Demo heuristic multi-file composer. */
+function demoComposer(body: import('../shared/types.js').ComposerRequest): import('../shared/types.js').ComposerFileChange[] {
+  const changes: import('../shared/types.js').ComposerFileChange[] = []
+  const q = body.instruction.toLowerCase()
+
+  for (const file of body.files) {
+    let modified = file.content
+    let desc = ''
+
+    // "add comment" / "document"
+    if (/\b(add|document|comment)\b/.test(q) && file.content.trim()) {
+      if (!file.content.startsWith('/**')) {
+        const fileName = file.path.split('/').pop() || file.path
+        modified = `/**\n * ${fileName}\n * ${body.instruction}\n */\n${file.content}`
+        desc = 'Added documentation header'
+      }
+    }
+    // "remove console.log"
+    else if (/remove.*console\.log|clean.*console/.test(q)) {
+      const cleaned = file.content
+        .split('\n')
+        .filter((l) => !l.trim().startsWith('console.log('))
+        .join('\n')
+      if (cleaned !== file.content) {
+        modified = cleaned
+        desc = 'Removed console.log statements'
+      }
+    }
+    // "add typescript" / "add types"
+    else if (/add.*type|typescript|annotate/.test(q) && file.path.endsWith('.js')) {
+      modified = file.content
+      desc = 'No structural changes needed (try with a real LLM for type annotations)'
+    }
+    // "format" / "prettier"
+    else if (/format|prettier|indent/.test(q)) {
+      modified = file.content
+        .split('\n')
+        .map((l) => l.replace(/\s+$/, ''))
+        .join('\n')
+      desc = 'Trimmed trailing whitespace'
+    }
+
+    if (desc) {
+      changes.push({
+        path: file.path,
+        before: file.content,
+        after: modified,
+        description: desc,
+        status: 'pending',
+      })
+    }
+  }
+
+  return changes
+}
+
 // ---------- natural-language shell (NL → command) ----------
 app.post('/api/nlsh', async (req, res) => {
   try {
