@@ -33,6 +33,7 @@ import MissionPanel from './components/MissionPanel'
 import SearchPanel from './components/SearchPanel'
 import { ProblemsPanel } from './components/ProblemsPanel'
 import Composer from './components/Composer'
+import FixPreviewModal from './components/FixPreviewModal'
 
 export default function App() {
   const refreshTree = useStore((s) => s.refreshTree)
@@ -413,6 +414,7 @@ export default function App() {
       <CommandPalette />
       <VoicePanel />
       <Composer />
+      <FixPreviewModal />
     </div>
   )
 }

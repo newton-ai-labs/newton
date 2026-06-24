@@ -1218,6 +1218,137 @@ async function runHeuristicDiagnostics(): Promise<Diagnostic[]> {
   return diagnostics.slice(0, 200)
 }
 
+// ---------- AI auto-fix for diagnostics ----------
+app.post('/api/diagnostics/fix', async (req, res) => {
+  try {
+    const { diagnostic, content, provider } = req.body as {
+      diagnostic: {
+        filePath: string
+        line: number
+        column: number
+        severity: string
+        message: string
+        code?: string
+        source: string
+      }
+      content: string
+      provider?: ProviderConfig
+    }
+    const p = provider ?? { provider: 'demo', model: 'demo' }
+
+    // Extract context: ~20 lines around the diagnostic line
+    const lines = content.split('\n')
+    const center = Math.max(0, Math.min(diagnostic.line - 1, lines.length - 1))
+    const start = Math.max(0, center - 10)
+    const end = Math.min(lines.length, center + 11)
+    const snippet = lines.slice(start, end).join('\n')
+    const marker = `[Line ${diagnostic.line - start + start}] ← here`
+
+    // Demo mode: heuristic fixes for common issues
+    if (p.provider === 'demo') {
+      const fix = demoFix(diagnostic, content)
+      return res.json(fix)
+    }
+
+    // Real provider: ask the LLM for a targeted fix
+    const sys =
+      'You are an expert code linter fixer. The user has a diagnostic error/warning in their code. ' +
+      'Fix ONLY the issue described. Return ONLY the COMPLETE corrected file content — ' +
+      'no markdown fences, no explanation, no commentary. ' +
+      'Preserve all other code exactly. Make the minimal change needed to resolve the issue.'
+
+    const user =
+      `File: ${diagnostic.filePath}\n` +
+      `Language: ${diagnostic.source === 'eslint' ? 'JavaScript/TypeScript' : 'TypeScript'}\n` +
+      `Diagnostic (${diagnostic.source}${diagnostic.code ? ` ${diagnostic.code}` : ''}): ${diagnostic.severity.toUpperCase()} at line ${diagnostic.line}, col ${diagnostic.column}\n` +
+      `Message: ${diagnostic.message}\n\n` +
+      `Code around line ${diagnostic.line}:\n\`\`\`\n${snippet}\n\`\`\`\n${marker}\n\n` +
+      `FULL FILE CONTENT:\n\`\`\`\n${content}\n\`\`\`\n\n` +
+      `Return the complete corrected file:`
+
+    let fixed = await llmComplete(p, sys, user)
+    fixed = fixed.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim()
+
+    res.json({
+      fixedContent: fixed,
+      explanation: `Fixed ${diagnostic.code ?? diagnostic.source} issue: ${diagnostic.message}`,
+    })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Demo heuristic fixes for common diagnostic issues. */
+function demoFix(
+  diagnostic: { filePath: string; line: number; message: string; code?: string; source: string },
+  content: string,
+): { fixedContent: string; explanation: string } {
+  const lines = content.split('\n')
+  const lineIdx = diagnostic.line - 1
+  if (lineIdx < 0 || lineIdx >= lines.length) {
+    return { fixedContent: content, explanation: 'Could not locate the problematic line.' }
+  }
+  const line = lines[lineIdx]
+  const msg = diagnostic.message.toLowerCase()
+
+  // Fix: 'X' is declared but never read → prefix with _
+  if (msg.includes('declared but never read') || msg.includes('is declared but its value')) {
+    const m = line.match(/(const|let|var)\s+(\w+)/)
+    if (m) {
+      lines[lineIdx] = line.replace(`${m[1]} ${m[2]}`, `${m[1]} _${m[2]}`)
+      return { fixedContent: lines.join('\n'), explanation: `Renamed unused variable to _${m[2]}` }
+    }
+  }
+
+  // Fix: cannot find name 'X' → add a placeholder import/comment
+  if (msg.includes('cannot find name')) {
+    const m = line.match(/'(\w+)'/)
+    if (m) {
+      lines[lineIdx] = `// TODO: define or import '${m[1]}'\n${line}`
+      return { fixedContent: lines.join('\n'), explanation: `Added TODO comment for undefined '${m[1]}'` }
+    }
+  }
+
+  // Fix: missing semicolon (eslint semi)
+  if (msg.includes('missing semicolon') || diagnostic.code === 'semi') {
+    if (!line.trimEnd().endsWith(';') && !line.trim().endsWith('{') && !line.trim().endsWith('}')) {
+      lines[lineIdx] = line.replace(/(\s*)$/, ';$1')
+      return { fixedContent: lines.join('\n'), explanation: 'Added missing semicolon' }
+    }
+  }
+
+  // Fix: expected ',' but got → try inserting comma
+  if (msg.includes("expected ','") || msg.includes('missing comma')) {
+    const trimmed = line.trimEnd()
+    if (!trimmed.endsWith(',')) {
+      lines[lineIdx] = line.replace(/(\s*)$/, ',$1')
+      return { fixedContent: lines.join('\n'), explanation: 'Added missing comma' }
+    }
+  }
+
+  // Fix: replace single quotes with double (quotes rule)
+  if (diagnostic.code === 'quotes' || msg.includes('use double quotes')) {
+    lines[lineIdx] = line.replace(/'([^']*)'/g, '"$1"')
+    return { fixedContent: lines.join('\n'), explanation: 'Converted single quotes to double quotes' }
+  }
+
+  // Fix: trailing whitespace
+  if (msg.includes('trailing whitespace') || diagnostic.code === 'no-trailing-spaces') {
+    lines[lineIdx] = line.replace(/\s+$/, '')
+    return { fixedContent: lines.join('\n'), explanation: 'Removed trailing whitespace' }
+  }
+
+  // Fix: TODO/FIXME — can't auto-fix, but acknowledge
+  if (diagnostic.source === 'heuristic' && /\b(TODO|FIXME|HACK)\b/.test(msg)) {
+    lines[lineIdx] = `${line}  // ← flagged for review`
+    return { fixedContent: lines.join('\n'), explanation: 'Flagged task marker for review (manual resolution needed)' }
+  }
+
+  // Fallback: add a comment noting the issue
+  lines[lineIdx] = `${line}  // FIXME: ${diagnostic.message}`
+  return { fixedContent: lines.join('\n'), explanation: `Added comment noting: ${diagnostic.message}` }
+}
+
 // ---------- Git / source control ----------
 interface GitFileChange {
   path: string

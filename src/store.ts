@@ -118,6 +118,30 @@ interface NewtonState {
   genTestsBusy: boolean
   generateTests: () => Promise<void>
 
+  // ---------- AI auto-fix for diagnostics ----------
+  /** Current fix preview: shows a diff modal for user to accept/reject */
+  fixPreview: {
+    filePath: string
+    originalContent: string
+    fixedContent: string
+    explanation: string
+  } | null
+  fixBusy: boolean
+  /** Request an AI fix for a diagnostic. Reads file content, calls backend, opens preview. */
+  fixDiagnostic: (diagnostic: {
+    filePath: string
+    line: number
+    column: number
+    severity: string
+    message: string
+    code?: string
+    source: string
+  }) => Promise<void>
+  /** Apply the current fix preview to the file on disk + editor tab */
+  applyFix: () => Promise<void>
+  /** Dismiss the fix preview without applying */
+  dismissFix: () => void
+
   setSettingsOpen: (v: boolean) => void
   setPaletteOpen: (v: boolean) => void
   setSidebarVisible: (v: boolean) => void
@@ -702,6 +726,75 @@ export const useStore = create<NewtonState>((set, get) => ({
       set({ genTestsBusy: false })
     }
   },
+
+  // ---------- AI auto-fix for diagnostics ----------
+  fixPreview: null,
+  fixBusy: false,
+
+  fixDiagnostic: async (diagnostic) => {
+    set({ fixBusy: true })
+    try {
+      // Read the file content
+      const fr = await fetch(`/api/file?path=${encodeURIComponent(diagnostic.filePath)}`)
+      if (!fr.ok) throw new Error('Could not read file')
+      const fdata = await fr.json()
+      const content = fdata.content ?? ''
+
+      const cfg = providerConfig(get().settings)
+      const r = await fetch('/api/diagnostics/fix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ diagnostic, content, provider: cfg }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const data = await r.json()
+
+      set({
+        fixPreview: {
+          filePath: diagnostic.filePath,
+          originalContent: content,
+          fixedContent: data.fixedContent ?? content,
+          explanation: data.explanation ?? 'Fix applied.',
+        },
+      })
+    } catch (e) {
+      get().toast(`Fix failed: ${(e as Error).message}`)
+    } finally {
+      set({ fixBusy: false })
+    }
+  },
+
+  applyFix: async () => {
+    const preview = get().fixPreview
+    if (!preview) return
+    try {
+      await fetch('/api/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: preview.filePath, content: preview.fixedContent }),
+      })
+      // Update the tab if open
+      const tab = get().tabs.find((t) => t.path === preview.filePath)
+      if (tab) {
+        set((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.id === tab.id
+              ? { ...t, content: preview.fixedContent, savedContent: preview.fixedContent }
+              : t,
+          ),
+          activeTabId: tab.id,
+        }))
+      } else {
+        await get().openFile(preview.filePath)
+      }
+      get().toast(`Fix applied → ${preview.filePath}`)
+      set({ fixPreview: null })
+    } catch (e) {
+      get().toast(`Apply fix failed: ${(e as Error).message}`)
+    }
+  },
+
+  dismissFix: () => set({ fixPreview: null }),
 
   setSettingsOpen: (v) => set({ settingsOpen: v }),
   setPaletteOpen: (v) => set({ paletteOpen: v }),

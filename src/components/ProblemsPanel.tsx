@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useStore } from '../store'
 
 // ---- types ----
 interface Diagnostic {
@@ -62,6 +63,15 @@ const RefreshIcon = ({ spinning }: { spinning: boolean }) => (
     />
   </svg>
 )
+const SparkleIcon = ({ className }: { className?: string }) => (
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className={className}>
+    <path
+      d="M8 1.5l1.8 4.2L14 7.5l-4.2 1.8L8 13.5l-1.8-4.2L2 7.5l4.2-1.8L8 1.5z"
+      fill="currentColor"
+    />
+    <path d="M13 11.5l.7 1.8.8.2-.8.2-.7 1.8-.7-1.8-.8-.2.8-.2.7-1.8z" fill="currentColor" opacity="0.6" />
+  </svg>
+)
 const FilterIcon = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
     <path
@@ -80,6 +90,8 @@ export function ProblemsPanel({ onOpenFile }: { onOpenFile?: (path: string, line
   const [filter, setFilter] = useState<'all' | 'errors' | 'warnings'>('all')
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set())
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const fixDiagnostic = useStore((s) => s.fixDiagnostic)
+  const fixBusy = useStore((s) => s.fixBusy)
 
   const fetchDiagnostics = useCallback(async () => {
     setLoading(true)
@@ -141,6 +153,17 @@ export function ProblemsPanel({ onOpenFile }: { onOpenFile?: (path: string, line
 
   const handleClick = (diag: Diagnostic) => {
     onOpenFile?.(diag.filePath, diag.line, diag.column)
+  }
+
+  const handleFix = (e: React.MouseEvent, diag: Diagnostic) => {
+    e.stopPropagation()
+    fixDiagnostic(diag)
+  }
+
+  const handleFixAllInFile = async (e: React.MouseEvent, diags: Diagnostic[]) => {
+    e.stopPropagation()
+    // Fix the first diagnostic; the preview modal lets the user apply + we can continue
+    if (diags.length > 0) fixDiagnostic(diags[0])
   }
 
   const errors = result?.errorCount ?? 0
@@ -227,6 +250,14 @@ export function ProblemsPanel({ onOpenFile }: { onOpenFile?: (path: string, line
                 role="button"
                 tabIndex={0}
               >
+                <button
+                  className="problems-fix-all-btn"
+                  title="Fix all with AI (runs on first issue)"
+                  onClick={(e) => handleFixAllInFile(e, diags)}
+                  disabled={fixBusy}
+                >
+                  <SparkleIcon /> Fix
+                </button>
                 <ChevronIcon open={isOpen} />
                 <span className="file-icon" aria-hidden>
                   📄
@@ -265,6 +296,14 @@ export function ProblemsPanel({ onOpenFile }: { onOpenFile?: (path: string, line
                     <span className="problems-diag-source">
                       {diag.code ? `${diag.source}(${diag.code})` : diag.source}
                     </span>
+                    <button
+                      className="problems-fix-btn"
+                      title="Fix with AI"
+                      onClick={(e) => handleFix(e, diag)}
+                      disabled={fixBusy}
+                    >
+                      <SparkleIcon />
+                    </button>
                   </div>
                 ))}
             </div>
