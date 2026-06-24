@@ -8,6 +8,13 @@ Works out-of-the-box in **Demo mode** (no API key needed), and supports **OpenAI
 
 ## ✨ Features
 
+### 🔍 Semantic Codebase Search & @-Mentions — *Innovation*
+- **Built-in TF-IDF indexer** with symbol-aware chunking (functions, classes, methods)
+- Runs in the background — re-indexes on every file save
+- **Auto-context:** every chat message is enriched with relevant code context
+- **@-mentions:** type `@` in the chat box to search & attach files as explicit context
+- Results show file paths, symbols, line numbers, and relevance scores
+
 ### Core Editor
 - **Monaco-powered editor** with syntax highlighting for 25+ languages
 - **File explorer** with create / delete / nested folders
@@ -148,7 +155,9 @@ client (React + Vite + Zustand + Monaco)
 server (Express + tsx)
   ├── /api/files         — file tree
   ├── /api/file          — read / write / delete / rename / create
-  ├── /api/chat          — streaming AI chat (SSE)
+  ├── /api/chat          — streaming AI chat (SSE, auto-context)
+  ├── /api/search        — semantic codebase search (TF-IDF)
+  ├── /api/index/*       — indexer stats / rebuild
   ├── /api/edit          — inline AI edit (⌘K)
   ├── /api/copilot       — ghost-text completion
   ├── /api/agent/*       — plan + apply agent steps
