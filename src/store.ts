@@ -51,6 +51,13 @@ interface NewtonState {
   settings: Settings
   toasts: Toast[]
 
+  // codebase search / @-mentions
+  searchResults: SearchHit[]
+  searchBusy: boolean
+  searchQuery: string
+  attachedContext: AttachedFile[]
+  indexStats: { totalFiles: number; totalChunks: number; indexing: boolean } | null
+
   // actions
   refreshTree: () => Promise<void>
   openFile: (path: string) => Promise<void>
@@ -97,6 +104,32 @@ interface NewtonState {
   setChatVisible: (v: boolean) => void
   setActiveView: (v: 'explorer' | 'search' | 'settings') => void
   toast: (text: string) => void
+
+  // codebase search / @-mentions
+  searchCode: (query: string) => Promise<void>
+  setSearchQuery: (q: string) => void
+  clearSearch: () => void
+  attachFile: (path: string) => Promise<void>
+  detachFile: (path: string) => void
+  clearAttached: () => void
+  refreshIndexStats: () => Promise<void>
+  rebuildIndex: () => Promise<void>
+}
+
+export interface SearchHit {
+  filePath: string
+  startLine: number
+  endLine: number
+  symbol?: string
+  kind: string
+  language: string
+  score: number
+  snippet: string
+}
+
+export interface AttachedFile {
+  path: string
+  content: string
 }
 
 // ---------- helpers ----------
@@ -194,6 +227,12 @@ export const useStore = create<NewtonState>((set, get) => ({
   activeView: 'explorer',
   settings: loadSettings(),
   toasts: [],
+
+  searchResults: [],
+  searchBusy: false,
+  searchQuery: '',
+  attachedContext: [],
+  indexStats: null,
 
   refreshTree: async () => {
     set({ treeLoading: true })
@@ -339,6 +378,12 @@ export const useStore = create<NewtonState>((set, get) => ({
       ? { path: activeTab.path, content: activeTab.content }
       : null
 
+    // @-mentioned attached files
+    const attached = get().attachedContext.map((f) => ({
+      path: f.path,
+      content: f.content,
+    }))
+
     set((s) => ({
       messages: [...s.messages, userMsg, assistantMsg],
       chatBusy: true,
@@ -355,6 +400,7 @@ export const useStore = create<NewtonState>((set, get) => ({
           messages: [...history, { role: 'user', content: trimmed }],
           provider: cfg,
           activeFile,
+          attachedFiles: attached,
         }),
         signal: abortCtrl.signal,
       })
@@ -391,6 +437,7 @@ export const useStore = create<NewtonState>((set, get) => ({
         messages: s.messages.map((m) =>
           m.id === assistantId ? { ...m, streaming: false } : m,
         ),
+        attachedContext: [],
       }))
       abortCtrl = null
     }
@@ -523,6 +570,89 @@ export const useStore = create<NewtonState>((set, get) => ({
     setTimeout(() => {
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
     }, 2600)
+  },
+
+  // ---------- codebase search / @-mentions ----------
+  searchCode: async (query) => {
+    const q = query.trim()
+    set({ searchQuery: q, searchBusy: true })
+    if (!q) {
+      set({ searchResults: [], searchBusy: false })
+      return
+    }
+    try {
+      const r = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=20`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const data = await r.json()
+      set({ searchResults: data.hits ?? [], searchBusy: false })
+    } catch {
+      set({ searchResults: [], searchBusy: false })
+    }
+  },
+
+  setSearchQuery: (q) => set({ searchQuery: q }),
+
+  clearSearch: () => set({ searchResults: [], searchQuery: '', searchBusy: false }),
+
+  attachFile: async (path) => {
+    // Don't attach twice
+    if (get().attachedContext.some((f) => f.path === path)) return
+    try {
+      const r = await fetch(`/api/file?path=${encodeURIComponent(path)}`)
+      if (!r.ok) throw new Error('fetch failed')
+      const data = await r.json()
+      set((s) => ({
+        attachedContext: [
+          ...s.attachedContext,
+          { path, content: data.content ?? '' },
+        ],
+      }))
+    } catch {
+      get().toast(`Could not read ${path}`)
+    }
+  },
+
+  detachFile: (path) =>
+    set((s) => ({
+      attachedContext: s.attachedContext.filter((f) => f.path !== path),
+    })),
+
+  clearAttached: () => set({ attachedContext: [] }),
+
+  refreshIndexStats: async () => {
+    try {
+      const r = await fetch('/api/index/stats')
+      if (!r.ok) return
+      const data = await r.json()
+      set({
+        indexStats: {
+          totalFiles: data.totalFiles,
+          totalChunks: data.totalChunks,
+          indexing: data.indexing,
+        },
+      })
+    } catch {
+      /* ignore */
+    }
+  },
+
+  rebuildIndex: async () => {
+    set({ indexStats: { totalFiles: 0, totalChunks: 0, indexing: true } })
+    try {
+      const r = await fetch('/api/index/rebuild', { method: 'POST' })
+      if (!r.ok) return
+      const data = await r.json()
+      set({
+        indexStats: {
+          totalFiles: data.totalFiles,
+          totalChunks: data.totalChunks,
+          indexing: false,
+        },
+      })
+      get().toast(`Index rebuilt: ${data.totalFiles} files, ${data.totalChunks} chunks`)
+    } catch {
+      get().toast('Index rebuild failed')
+    }
   },
 }))
 

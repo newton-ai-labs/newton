@@ -14,6 +14,10 @@ import {
   Wand2,
   MessageSquare,
   Bot,
+  AtSign,
+  X,
+  Search as SearchIcon,
+  Loader2,
 } from 'lucide-react'
 import { useStore } from '../store'
 import AgentPanel from './AgentPanel'
@@ -42,9 +46,30 @@ export default function ChatPanel() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
+  // @-mentions state
+  const [mentionOpen, setMentionOpen] = useState(false)
+  const [mentionQuery, setMentionQuery] = useState('')
+  const [mentionIdx, setMentionIdx] = useState(0)
+  const searchResults = useStore((s) => s.searchResults)
+  const searchBusy = useStore((s) => s.searchBusy)
+  const searchCode = useStore((s) => s.searchCode)
+  const clearSearch = useStore((s) => s.clearSearch)
+  const attachedContext = useStore((s) => s.attachedContext)
+  const attachFile = useStore((s) => s.attachFile)
+  const detachFile = useStore((s) => s.detachFile)
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages])
+
+  // Handle @-mention detection and search
+  useEffect(() => {
+    if (!mentionOpen) return
+    const q = mentionQuery.trim()
+    if (!q) return
+    const t = setTimeout(() => searchCode(q), 200)
+    return () => clearTimeout(t)
+  }, [mentionOpen, mentionQuery, searchCode])
 
   const submit = () => {
     if (!text.trim() || busy) return
@@ -54,9 +79,62 @@ export default function ChatPanel() {
   }
 
   const onKey = (e: React.KeyboardEvent) => {
+    // @-mention navigation
+    if (mentionOpen && searchResults.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionIdx((i) => (i + 1) % searchResults.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionIdx((i) => (i - 1 + searchResults.length) % searchResults.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        const hit = searchResults[mentionIdx]
+        if (hit) {
+          attachFile(hit.filePath)
+          // remove the @query from the text
+          setText((t) => t.replace(/@[^@\s]*$/, ''))
+          setMentionOpen(false)
+          setMentionQuery('')
+          clearSearch()
+          setMentionIdx(0)
+          taRef.current?.focus()
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setMentionOpen(false)
+        setMentionQuery('')
+        clearSearch()
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       submit()
+    }
+  }
+
+  const onTextChange = (val: string) => {
+    setText(val)
+    // Detect @-mention
+    const match = val.match(/@([^@\s]*)$/)
+    if (match) {
+      setMentionOpen(true)
+      setMentionQuery(match[1])
+      setMentionIdx(0)
+    } else {
+      if (mentionOpen) {
+        setMentionOpen(false)
+        setMentionQuery('')
+        clearSearch()
+      }
     }
   }
 
@@ -146,29 +224,110 @@ export default function ChatPanel() {
       </div>
 
       <div className="chat-input-area">
-        {activeTab && (
+        {/* Attached context chips */}
+        {(attachedContext.length > 0 || activeTab) && (
           <div className="chat-context">
-            <FileCode size={11} />
-            <span className="context-chip">{activeTab.path}</span>
-            <span>attached as context</span>
+            {activeTab && (
+              <span className="context-chip">
+                <FileCode size={10} />
+                {activeTab.path}
+              </span>
+            )}
+            {attachedContext.map((f) => (
+              <span key={f.path} className="context-chip removable">
+                <AtSign size={10} />
+                {f.path}
+                <button
+                  className="chip-x"
+                  onClick={() => detachFile(f.path)}
+                  title="Remove"
+                >
+                  <X size={10} />
+                </button>
+              </span>
+            ))}
           </div>
         )}
-        <div className="chat-input-wrap">
+
+        <div className="chat-input-wrap" style={{ position: 'relative' }}>
+          {/* @-mention popup */}
+          {mentionOpen && (
+            <div className="mention-popup">
+              <div className="mention-popup-header">
+                {searchBusy ? (
+                  <Loader2 size={11} className="spin" />
+                ) : (
+                  <SearchIcon size={11} />
+                )}
+                <span>
+                  {searchBusy ? 'Searching codebase…' : 'Codebase results'}
+                  {mentionQuery && ` for "${mentionQuery}"`}
+                </span>
+              </div>
+              {searchResults.length === 0 && !searchBusy && (
+                <div className="mention-empty">
+                  No matches. Try a different term.
+                </div>
+              )}
+              {searchResults.map((hit, i) => (
+                <button
+                  key={`${hit.filePath}:${hit.startLine}`}
+                  className={`mention-item ${i === mentionIdx ? 'active' : ''}`}
+                  onMouseEnter={() => setMentionIdx(i)}
+                  onClick={() => {
+                    attachFile(hit.filePath)
+                    setText((t) => t.replace(/@[^@\s]*$/, ''))
+                    setMentionOpen(false)
+                    setMentionQuery('')
+                    clearSearch()
+                    setMentionIdx(0)
+                    taRef.current?.focus()
+                  }}
+                >
+                  <FileCode size={12} />
+                  <div className="mention-item-body">
+                    <div className="mention-item-path">{hit.filePath}</div>
+                    {hit.symbol && (
+                      <div className="mention-item-symbol">
+                        {hit.kind}: <code>{hit.symbol}</code>
+                        <span className="mention-item-lines">
+                          {' '}L{hit.startLine}–{hit.endLine}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  <span className="mention-item-score">
+                    {(hit.score * 100).toFixed(0)}%
+                  </span>
+                </button>
+              ))}
+              <div className="mention-popup-footer">
+                <kbd>↑↓</kbd> navigate · <kbd>↵</kbd> attach · <kbd>esc</kbd> close
+              </div>
+            </div>
+          )}
+
           <textarea
             ref={taRef}
             className="chat-input"
             placeholder={
               settings.provider === 'demo'
-                ? 'Ask the demo assistant… (add a provider in Settings for full power)'
-                : `Message ${settings.provider}…`
+                ? 'Ask anything… type @ to search your codebase'
+                : `Message ${settings.provider}… type @ to add files`
             }
             value={text}
             rows={1}
             onChange={(e) => {
-              setText(e.target.value)
+              onTextChange(e.target.value)
               autosize(e.target)
             }}
             onKeyDown={onKey}
+            onBlur={() => {
+              // delay so click on popup registers first
+              setTimeout(() => {
+                setMentionOpen(false)
+              }, 200)
+            }}
           />
           {busy ? (
             <button className="chat-send" title="Stop" onClick={stop} style={{ background: 'var(--red)' }}>
@@ -179,6 +338,11 @@ export default function ChatPanel() {
               <Send size={14} />
             </button>
           )}
+        </div>
+        <div className="chat-hint-row">
+          <span className="chat-hint">
+            <AtSign size={10} /> <code>@</code> to attach files
+          </span>
         </div>
         {settings.provider === 'demo' && (
           <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-faint)' }}>

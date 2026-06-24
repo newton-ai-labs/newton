@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import type { ChatRequest, EditRequest, EditResponse, FileNode, ProviderConfig, AgentRequest } from '../shared/types.js'
 import { demoAnswer, streamDemo, demoEdit } from './demoAi.js'
 import { demoPlan, executeStep, llmPlan } from './agent.js'
+import { getIndex, type SearchHit } from './indexing.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -97,6 +98,8 @@ app.post('/api/file', async (req, res) => {
     const abs = safeJoin(rel)
     await fs.mkdir(path.dirname(abs), { recursive: true })
     await fs.writeFile(abs, content, 'utf8')
+    // Background reindex — fire and forget so save stays fast
+    index.index().catch(() => {})
     res.json({ ok: true, path: rel })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
@@ -141,19 +144,95 @@ app.post('/api/file/create', async (req, res) => {
   }
 })
 
+// ---------- codebase index ----------
+const index = getIndex(WORKSPACE)
+
+// Load persisted index on startup (non-blocking)
+index.load().then((loaded) => {
+  if (loaded) {
+    // eslint-disable-next-line no-console
+    console.log(`  Codebase index loaded from cache (${index.getStats().totalChunks} chunks)`)
+  }
+  // Always do a fresh index in the background to pick up changes
+  index.index().catch(() => {})
+})
+
+// ---------- semantic search endpoints ----------
+app.get('/api/search', async (req, res) => {
+  try {
+    const q = String(req.query.q ?? '')
+    const limit = Math.min(Number(req.query.limit) || 8, 30)
+    if (!q.trim()) return res.json({ hits: [] })
+    const hits = index.search(q, limit)
+    res.json({
+      hits: hits.map((h) => ({
+        filePath: h.chunk.filePath,
+        startLine: h.chunk.startLine,
+        endLine: h.chunk.endLine,
+        symbol: h.chunk.symbol,
+        kind: h.chunk.kind,
+        language: h.chunk.language,
+        score: h.score,
+        snippet: h.chunk.content.slice(0, 500),
+      })),
+    })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.get('/api/index/stats', (_req, res) => {
+  res.json(index.getStats())
+})
+
+app.post('/api/index/rebuild', async (_req, res) => {
+  try {
+    await index.index()
+    res.json({ ok: true, ...index.getStats() })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
 // ---------- chat / AI proxy (streaming) ----------
 function buildSystemPrompt(req: ChatRequest): string {
   const base =
     'You are Newton, an elite AI pair-programmer embedded in a code editor. ' +
     'Be concise, correct, and practical. Use Markdown. Use fenced code blocks with language tags. ' +
-    'When the user references "this file" or "my code", use the active file context.'
+    'When the user references "this file" or "my code", use the active file context. ' +
+    'When the user asks about the codebase, use the relevant code context provided below.'
+
+  let context = base
+
+  // Inject active file context
   if (req.activeFile?.content) {
-    return (
-      base +
+    context +=
       `\n\nThe user currently has \`${req.activeFile.path}\` open:\n\`\`\`\n${req.activeFile.content.slice(0, 12000)}\n\`\`\``
-    )
   }
-  return base
+
+  // Inject @-mentioned attached files
+  if (req.attachedFiles && req.attachedFiles.length > 0) {
+    context +=
+      '\n\n--- @-MENTIONED FILES (explicitly attached by the user) ---'
+    for (const f of req.attachedFiles) {
+      context += `\nFile: \`${f.path}\`\n\`\`\`\n${f.content.slice(0, 8000)}\n\`\`\`\n`
+    }
+    context += '--- END @-MENTIONED FILES ---'
+  }
+
+  // Inject semantic codebase context: search for relevant code using the last user message
+  const lastUserMsg = [...req.messages].reverse().find((m) => m.role === 'user')
+  if (lastUserMsg) {
+    const codebaseCtx = index.getContextForQuery(lastUserMsg.content, 6000)
+    if (codebaseCtx) {
+      context +=
+        `\n\n--- RELEVANT CODEBASE CONTEXT (from semantic search) ---\n${codebaseCtx}\n--- END CONTEXT ---\n` +
+        'Use this context to ground your answers. If the user asks "where is X" or "find Y", ' +
+        'reference these files with their paths and line numbers.'
+    }
+  }
+
+  return context
 }
 
 app.post('/api/chat', async (req, res) => {

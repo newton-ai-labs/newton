@@ -25,6 +25,8 @@ export interface ChatRequest {
   messages: ChatMessage[]
   provider: ProviderConfig
   activeFile?: { path: string; content: string } | null
+  /** @-mentioned files attached by the user for this message */
+  attachedFiles?: { path: string; content: string }[]
   /** when true, ignore configured provider and use built-in demo AI */
   forceDemo?: boolean
 }
