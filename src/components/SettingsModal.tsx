@@ -1,57 +1,12 @@
 import { useState } from 'react'
-import { X, Check, KeyRound, Cpu, Zap, Shield } from 'lucide-react'
+import * as LucideIcons from 'lucide-react'
 import { useStore } from '../store'
-import type { Provider, Settings as SettingsType } from '../../shared/types'
-
-const PROVIDERS: {
-  id: Provider
-  name: string
-  desc: string
-  icon: typeof Zap
-  color: string
-  models: string[]
-  needsKey: boolean
-  needsBaseUrl?: boolean
-}[] = [
-  {
-    id: 'demo',
-    name: 'Demo (no key)',
-    desc: 'Built-in offline assistant. Great for trying Newton without setup.',
-    icon: Zap,
-    color: 'var(--accent-2)',
-    models: ['demo'],
-    needsKey: false,
-  },
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    desc: 'GPT-4o, o1 and more. Requires an OpenAI API key.',
-    icon: Cpu,
-    color: '#10a37f',
-    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1-preview', 'o1-mini'],
-    needsKey: true,
-    needsBaseUrl: true,
-  },
-  {
-    id: 'anthropic',
-    name: 'Anthropic',
-    desc: 'Claude 3.5 Sonnet / Haiku. Requires an Anthropic API key.',
-    icon: Shield,
-    color: '#d97757',
-    models: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'],
-    needsKey: true,
-  },
-  {
-    id: 'ollama',
-    name: 'Ollama (local)',
-    desc: 'Run models locally with Ollama. Free and private.',
-    icon: Cpu,
-    color: '#7c5cff',
-    models: ['llama3.1', 'qwen2.5-coder', 'deepseek-coder-v2', 'mistral'],
-    needsKey: false,
-    needsBaseUrl: true,
-  },
-]
+import {
+  PROVIDER_REGISTRY,
+  type Provider,
+  type Settings as SettingsType,
+  type PerProviderSettings,
+} from '../../shared/types'
 
 export default function SettingsModal() {
   const open = useStore((s) => s.settingsOpen)
@@ -65,7 +20,25 @@ export default function SettingsModal() {
 
   const set = (partial: Partial<SettingsType>) => setSettings(partial)
 
-  const activeProvider = PROVIDERS.find((p) => p.id === settings.provider)!
+  /** Update a single field in the active provider's config. */
+  const setProviderField = (field: keyof PerProviderSettings, value: string) => {
+    const id = settings.provider
+    const current = settings.providerConfigs[id] ?? {
+      model: '',
+      apiKey: '',
+      baseUrl: '',
+    }
+    set({
+      providerConfigs: {
+        ...settings.providerConfigs,
+        [id]: { ...current, [field]: value },
+      },
+    })
+    showSaved()
+  }
+
+  const activeDef = PROVIDER_REGISTRY.find((p) => p.id === settings.provider)!
+  const activeCfg = settings.providerConfigs[settings.provider]
 
   const showSaved = () => {
     setSaved(true)
@@ -78,7 +51,7 @@ export default function SettingsModal() {
         <div className="modal-header">
           <h2>Settings</h2>
           <button className="mini-btn" onClick={() => setOpen(false)}>
-            <X size={16} />
+            <LucideIcons.X size={16} />
           </button>
         </div>
 
@@ -88,20 +61,25 @@ export default function SettingsModal() {
             <h3>AI Provider</h3>
             <p className="section-desc">Choose how Newton's assistant is powered.</p>
             <div className="provider-grid">
-              {PROVIDERS.map((p) => {
-                const Icon = p.icon
+              {PROVIDER_REGISTRY.map((p) => {
+                // @ts-expect-error — dynamic icon lookup from registry string
+                const Icon = LucideIcons[p.icon] ?? LucideIcons.Cpu
                 const active = settings.provider === p.id
                 return (
                   <div
                     key={p.id}
                     className={`provider-card ${active ? 'active' : ''}`}
                     onClick={() => {
-                      set({
-                        provider: p.id,
-                        ...(p.id === 'openai' && !settings.openaiModel ? { openaiModel: p.models[0] } : {}),
-                        ...(p.id === 'anthropic' && !settings.anthropicModel ? { anthropicModel: p.models[0] } : {}),
-                        ...(p.id === 'ollama' && !settings.ollamaModel ? { ollamaModel: p.models[0] } : {}),
-                      })
+                      // switching provider — ensure it has a default model
+                      const next = { ...settings.providerConfigs }
+                      if (!next[p.id]?.model) {
+                        next[p.id] = {
+                          model: p.models[0],
+                          apiKey: next[p.id]?.apiKey ?? '',
+                          baseUrl: next[p.id]?.baseUrl ?? p.defaultBaseUrl,
+                        }
+                      }
+                      set({ provider: p.id, providerConfigs: next })
                     }}
                   >
                     <div className="provider-icon" style={{ background: `${p.color}22`, color: p.color }}>
@@ -113,7 +91,7 @@ export default function SettingsModal() {
                     </div>
                     {active && (
                       <div className="provider-check">
-                        <Check size={14} />
+                        <LucideIcons.Check size={14} />
                       </div>
                     )}
                   </div>
@@ -123,86 +101,58 @@ export default function SettingsModal() {
           </section>
 
           {/* Per-provider config */}
-          {activeProvider.needsKey && (
+          {activeDef.needsKey && (
             <section>
               <h3>
-                <KeyRound size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />
-                {activeProvider.name} API Key
+                <LucideIcons.KeyRound size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+                {activeDef.name} API Key
               </h3>
               <input
                 type="password"
                 className="input"
-                placeholder={`sk-...`}
-                value={
-                  activeProvider.id === 'openai' ? settings.openaiApiKey : settings.anthropicApiKey
-                }
-                onChange={(e) =>
-                  set(
-                    activeProvider.id === 'openai'
-                      ? { openaiApiKey: e.target.value }
-                      : { anthropicApiKey: e.target.value },
-                  )
-                }
-                onBlur={showSaved}
+                placeholder={activeDef.keyHint || 'sk-...'}
+                value={activeCfg?.apiKey ?? ''}
+                onChange={(e) => setProviderField('apiKey', e.target.value)}
               />
-              <p className="hint">Stored locally in your browser. Never sent anywhere except the provider.</p>
+              <p className="hint">Stored locally in your browser. Never sent anywhere except {activeDef.name}.</p>
             </section>
           )}
 
-          {/* Model */}
+          {/* Model — free text + datalist so users can type custom models */}
           {settings.provider !== 'demo' && (
             <section>
               <h3>Model</h3>
-              <select
+              <input
                 className="input"
-                value={
-                  settings.provider === 'openai'
-                    ? settings.openaiModel
-                    : settings.provider === 'anthropic'
-                      ? settings.anthropicModel
-                      : settings.ollamaModel
-                }
-                onChange={(e) => {
-                  if (settings.provider === 'openai') set({ openaiModel: e.target.value })
-                  else if (settings.provider === 'anthropic') set({ anthropicModel: e.target.value })
-                  else set({ ollamaModel: e.target.value })
-                }}
-              >
-                {activeProvider.models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
+                list="model-suggestions"
+                placeholder={activeDef.models[0]}
+                value={activeCfg?.model ?? ''}
+                onChange={(e) => setProviderField('model', e.target.value)}
+              />
+              <datalist id="model-suggestions">
+                {activeDef.models.map((m) => (
+                  <option key={m} value={m} />
                 ))}
-              </select>
+              </datalist>
+              <p className="hint">Type a custom model name or pick from suggestions.</p>
             </section>
           )}
 
           {/* Base URL */}
-          {activeProvider.needsBaseUrl && settings.provider === 'openai' && (
+          {activeDef.needsBaseUrl && settings.provider !== 'demo' && (
             <section>
-              <h3>OpenAI Base URL (optional)</h3>
+              <h3>{activeDef.name} Base URL</h3>
               <input
                 className="input"
-                placeholder="https://api.openai.com/v1"
-                value={settings.openaiBaseUrl}
-                onChange={(e) => set({ openaiBaseUrl: e.target.value })}
-                onBlur={showSaved}
+                placeholder={activeDef.defaultBaseUrl}
+                value={activeCfg?.baseUrl ?? ''}
+                onChange={(e) => setProviderField('baseUrl', e.target.value)}
               />
-              <p className="hint">Override for Azure OpenAI or OpenAI-compatible endpoints.</p>
-            </section>
-          )}
-
-          {settings.provider === 'ollama' && (
-            <section>
-              <h3>Ollama URL</h3>
-              <input
-                className="input"
-                placeholder="http://localhost:11434"
-                value={settings.ollamaBaseUrl}
-                onChange={(e) => set({ ollamaBaseUrl: e.target.value })}
-                onBlur={showSaved}
-              />
-              <p className="hint">Make sure Ollama is running (<code>ollama serve</code>).</p>
+              <p className="hint">
+                {settings.provider === 'ollama'
+                  ? <>Make sure Ollama is running (<code>ollama serve</code>).</>
+                  : <>Override for self-hosted or compatible endpoints.</>}
+              </p>
             </section>
           )}
 
@@ -239,7 +189,7 @@ export default function SettingsModal() {
         <div className="modal-footer">
           {saved && (
             <span style={{ color: 'var(--green)', fontSize: 13, marginRight: 'auto' }}>
-              <Check size={12} style={{ verticalAlign: '-1px' }} /> Saved
+              <LucideIcons.Check size={12} style={{ verticalAlign: '-1px' }} /> Saved
             </span>
           )}
           <button className="btn-primary" onClick={() => { setOpen(false); toast('Settings saved') }}>

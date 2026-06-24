@@ -2,10 +2,11 @@ import { create } from 'zustand'
 import { nanoid } from 'nanoid'
 import {
   DEFAULT_SETTINGS,
+  migrateSettings,
   type FileNode,
   type Settings,
   type ChatMessage,
-  type Provider,
+  type ProviderConfig,
   type WorkspaceMemory,
   type MemoryEntryType,
   type Mission,
@@ -279,29 +280,18 @@ function guessTestPath(filePath: string): string {
   return [...parts, `${base}.test${ext || '.ts'}`].join('/')
 }
 
-function providerConfig(s: Settings) {
-  switch (s.provider) {
-    case 'openai':
-      return {
-        provider: 'openai' as Provider,
-        model: s.openaiModel,
-        apiKey: s.openaiApiKey,
-        baseUrl: s.openaiBaseUrl,
-      }
-    case 'anthropic':
-      return {
-        provider: 'anthropic' as Provider,
-        model: s.anthropicModel,
-        apiKey: s.anthropicApiKey,
-      }
-    case 'ollama':
-      return {
-        provider: 'ollama' as Provider,
-        model: s.ollamaModel,
-        baseUrl: s.ollamaBaseUrl,
-      }
-    default:
-      return { provider: 'demo' as Provider, model: 'demo' }
+/**
+ * Build a ProviderConfig from the new registry-driven Settings.
+ * Reads the per-provider config map (providerConfigs) for the active provider.
+ */
+function providerConfig(s: Settings): ProviderConfig {
+  if (s.provider === 'demo') return { provider: 'demo', model: 'demo' }
+  const pc = s.providerConfigs[s.provider]
+  return {
+    provider: s.provider,
+    model: pc?.model || 'demo',
+    apiKey: pc?.apiKey || undefined,
+    baseUrl: pc?.baseUrl || undefined,
   }
 }
 
@@ -1231,7 +1221,7 @@ export const useStore = create<NewtonState>((set, get) => ({
 function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem('newton-settings')
-    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }
+    if (raw) return migrateSettings(JSON.parse(raw))
   } catch {
     /* ignore */
   }

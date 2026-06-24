@@ -43,29 +43,15 @@ export default function AgentPanel() {
   const requiresConfirm = consequence?.overallRisk === 'critical' || !!consequence?.hasIrreversible
   const canRun = !consequence || !consequence.requiresApproval || approved || (requiresConfirm && confirmText.trim().toLowerCase() === 'approve')
 
-  const providerConfig = {
-    provider: settings.provider,
-    model:
-      settings.provider === 'openai'
-        ? settings.openaiModel
-        : settings.provider === 'anthropic'
-        ? settings.anthropicModel
-        : settings.provider === 'ollama'
-        ? settings.ollamaModel
-        : 'demo',
-    apiKey:
-      settings.provider === 'openai'
-        ? settings.openaiApiKey
-        : settings.provider === 'anthropic'
-        ? settings.anthropicApiKey
-        : undefined,
-    baseUrl:
-      settings.provider === 'openai'
-        ? settings.openaiBaseUrl
-        : settings.provider === 'ollama'
-        ? settings.ollamaBaseUrl
-        : undefined,
-  }
+  const providerConfig =
+    settings.provider === 'demo'
+      ? { provider: 'demo' as const, model: 'demo' }
+      : {
+          provider: settings.provider,
+          model: settings.providerConfigs[settings.provider]?.model ?? 'demo',
+          apiKey: settings.providerConfigs[settings.provider]?.apiKey,
+          baseUrl: settings.providerConfigs[settings.provider]?.baseUrl,
+        }
 
   async function handlePlan() {
     if (!task.trim()) return

@@ -340,7 +340,7 @@ export default function App() {
             <Sparkles size={11} className="spark" />
             {settings.provider === 'demo' ? 'Demo' : settings.provider}
             {settings.provider !== 'demo' && (
-              <> · {settings.provider === 'openai' ? settings.openaiModel : settings.provider === 'anthropic' ? settings.anthropicModel : settings.ollamaModel}</>
+              <> · {settings.providerConfigs[settings.provider]?.model}</>
             )}
           </span>
           <button

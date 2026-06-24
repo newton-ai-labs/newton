@@ -1,6 +1,214 @@
 // Shared types between client and server.
 
-export type Provider = 'demo' | 'openai' | 'anthropic' | 'ollama'
+/** Wire protocol a provider speaks — determines how we format requests/parse streams. */
+export type ProviderProtocol = 'openai-compat' | 'anthropic' | 'ollama'
+
+export type Provider =
+  | 'demo'
+  | 'openai'
+  | 'anthropic'
+  | 'ollama'
+  | 'groq'
+  | 'mistral'
+  | 'deepseek'
+  | 'openrouter'
+  | 'together'
+  | 'xai'
+  | 'gemini'
+
+/** Static metadata for each provider — the single source of truth. */
+export interface ProviderDef {
+  id: Provider
+  name: string
+  desc: string
+  /** hex color for the icon chip */
+  color: string
+  /** lucide-react icon name */
+  icon: string
+  models: string[]
+  needsKey: boolean
+  needsBaseUrl: boolean
+  protocol: ProviderProtocol
+  defaultBaseUrl: string
+  keyHint: string
+}
+
+/**
+ * The provider registry. To add a new provider, add ONE entry here.
+ * Everything else (server dispatch, settings UI, status bar) is driven by this table.
+ */
+export const PROVIDER_REGISTRY: ProviderDef[] = [
+  {
+    id: 'demo',
+    name: 'Demo (no key)',
+    desc: 'Built-in offline assistant — try Newton with zero setup.',
+    color: '#7c5cff',
+    icon: 'Zap',
+    models: ['demo'],
+    needsKey: false,
+    needsBaseUrl: false,
+    protocol: 'openai-compat',
+    defaultBaseUrl: '',
+    keyHint: '',
+  },
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    desc: 'GPT-4o, o1, o3-mini and more.',
+    color: '#10a37f',
+    icon: 'Cpu',
+    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1-preview', 'o1-mini', 'o3-mini'],
+    needsKey: true,
+    needsBaseUrl: true,
+    protocol: 'openai-compat',
+    defaultBaseUrl: 'https://api.openai.com/v1',
+    keyHint: 'sk-...',
+  },
+  {
+    id: 'anthropic',
+    name: 'Anthropic',
+    desc: 'Claude 3.5 Sonnet, Haiku, and Opus.',
+    color: '#d97757',
+    icon: 'Shield',
+    models: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
+    needsKey: true,
+    needsBaseUrl: false,
+    protocol: 'anthropic',
+    defaultBaseUrl: 'https://api.anthropic.com',
+    keyHint: 'sk-ant-...',
+  },
+  {
+    id: 'ollama',
+    name: 'Ollama (local)',
+    desc: 'Run models locally — free and completely private.',
+    color: '#6b7280',
+    icon: 'Cpu',
+    models: ['llama3.1', 'qwen2.5-coder', 'deepseek-coder-v2', 'mistral', 'phi3'],
+    needsKey: false,
+    needsBaseUrl: true,
+    protocol: 'ollama',
+    defaultBaseUrl: 'http://localhost:11434',
+    keyHint: '',
+  },
+  {
+    id: 'groq',
+    name: 'Groq',
+    desc: 'Ultra-low-latency inference. Llama, Mixtral, Gemma.',
+    color: '#f55036',
+    icon: 'Zap',
+    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it'],
+    needsKey: true,
+    needsBaseUrl: false,
+    protocol: 'openai-compat',
+    defaultBaseUrl: 'https://api.groq.com/openai/v1',
+    keyHint: 'gsk_...',
+  },
+  {
+    id: 'mistral',
+    name: 'Mistral AI',
+    desc: 'Mistral Large, Codestral, and open models.',
+    color: '#ff7000',
+    icon: 'Cpu',
+    models: ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest', 'open-mistral-nemo'],
+    needsKey: true,
+    needsBaseUrl: false,
+    protocol: 'openai-compat',
+    defaultBaseUrl: 'https://api.mistral.ai/v1',
+    keyHint: '...',
+  },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    desc: 'DeepSeek-V3, DeepSeek-R1 — great at reasoning & code.',
+    color: '#4d6bfe',
+    icon: 'Cpu',
+    models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-coder'],
+    needsKey: true,
+    needsBaseUrl: false,
+    protocol: 'openai-compat',
+    defaultBaseUrl: 'https://api.deepseek.com/v1',
+    keyHint: 'sk-...',
+  },
+  {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    desc: 'Access 100+ models through one API. GPT, Claude, Llama, Gemini…',
+    color: '#8b5cf6',
+    icon: 'Share2',
+    models: [
+      'openai/gpt-4o',
+      'openai/gpt-4o-mini',
+      'anthropic/claude-3.5-sonnet',
+      'anthropic/claude-3.5-haiku',
+      'google/gemini-flash-1.5',
+      'meta-llama/llama-3.3-70b-instruct',
+      'deepseek/deepseek-chat',
+      'x-ai/grok-2',
+    ],
+    needsKey: true,
+    needsBaseUrl: false,
+    protocol: 'openai-compat',
+    defaultBaseUrl: 'https://openrouter.ai/api/v1',
+    keyHint: 'sk-or-...',
+  },
+  {
+    id: 'together',
+    name: 'Together AI',
+    desc: 'Fast open-source model hosting. Llama, Qwen, CodeLlama.',
+    color: '#0f6fff',
+    icon: 'Cpu',
+    models: [
+      'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+      'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
+      'Qwen/Qwen2.5-Coder-32B-Instruct',
+      'codellama/CodeLlama-70b-Instruct-hf',
+    ],
+    needsKey: true,
+    needsBaseUrl: false,
+    protocol: 'openai-compat',
+    defaultBaseUrl: 'https://api.together.xyz/v1',
+    keyHint: '...',
+  },
+  {
+    id: 'xai',
+    name: 'xAI (Grok)',
+    desc: 'Grok models from xAI.',
+    color: '#1d9bf0',
+    icon: 'Cpu',
+    models: ['grok-2-latest', 'grok-2', 'grok-beta'],
+    needsKey: true,
+    needsBaseUrl: false,
+    protocol: 'openai-compat',
+    defaultBaseUrl: 'https://api.x.ai/v1',
+    keyHint: 'xai-...',
+  },
+  {
+    id: 'gemini',
+    name: 'Google Gemini',
+    desc: 'Gemini 2.0 Flash, 1.5 Pro & Flash — via OpenAI-compat endpoint.',
+    color: '#4285f4',
+    icon: 'Sparkles',
+    models: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'],
+    needsKey: true,
+    needsBaseUrl: false,
+    protocol: 'openai-compat',
+    defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    keyHint: 'AIza...',
+  },
+]
+
+export const PROVIDER_MAP: Record<string, ProviderDef> = Object.fromEntries(
+  PROVIDER_REGISTRY.map((p) => [p.id, p]),
+)
+
+export function getProviderDef(id: string): ProviderDef | undefined {
+  return PROVIDER_MAP[id]
+}
+
+/** Determine the protocol for a given provider id. Defaults to openai-compat. */
+export function getProtocol(id: string): ProviderProtocol {
+  return PROVIDER_MAP[id]?.protocol ?? 'openai-compat'
+}
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -76,33 +284,72 @@ export interface AgentRequest {
   forceDemo?: boolean
 }
 
+/** Per-provider config stored in Settings. */
+export interface PerProviderSettings {
+  model: string
+  apiKey: string
+  baseUrl: string
+}
+
 export interface Settings {
   provider: Provider
-  openaiModel: string
-  openaiApiKey: string
-  openaiBaseUrl: string
-  anthropicModel: string
-  anthropicApiKey: string
-  ollamaModel: string
-  ollamaBaseUrl: string
+  /** Generic per-provider config map — supports any provider in the registry. */
+  providerConfigs: Partial<Record<Provider, PerProviderSettings>>
   theme: 'newton-dark' | 'newton-light'
   fontSize: number
   systemPrompt: string
 }
 
+/** Build default provider configs from the registry (first model as default). */
+function buildDefaultProviderConfigs(): Partial<Record<Provider, PerProviderSettings>> {
+  const map: Partial<Record<Provider, PerProviderSettings>> = {}
+  for (const def of PROVIDER_REGISTRY) {
+    if (def.id === 'demo') continue
+    map[def.id] = {
+      model: def.models[0],
+      apiKey: '',
+      baseUrl: def.defaultBaseUrl,
+    }
+  }
+  return map
+}
+
 export const DEFAULT_SETTINGS: Settings = {
   provider: 'demo',
-  openaiModel: 'gpt-4o-mini',
-  openaiApiKey: '',
-  openaiBaseUrl: 'https://api.openai.com/v1',
-  anthropicModel: 'claude-3-5-sonnet-20241022',
-  anthropicApiKey: '',
-  ollamaModel: 'llama3.1',
-  ollamaBaseUrl: 'http://localhost:11434',
+  providerConfigs: buildDefaultProviderConfigs(),
   theme: 'newton-dark',
   fontSize: 13,
   systemPrompt:
     'You are Newton, a friendly, expert AI pair programmer embedded in a code editor. Be concise and practical. When sharing code, use fenced code blocks with the language tag. If the user shares a file, use it as context.',
+}
+
+/**
+ * Migrate legacy settings (pre-registry) to the new generic format.
+ * Legacy shape had openaiModel/openaiApiKey/etc flat fields.
+ */
+export function migrateSettings(raw: Record<string, any>): Settings {
+  // If already in new format, merge with defaults
+  if (raw.providerConfigs && typeof raw.providerConfigs === 'object') {
+    return { ...DEFAULT_SETTINGS, ...raw, providerConfigs: { ...DEFAULT_SETTINGS.providerConfigs, ...raw.providerConfigs } }
+  }
+  // Legacy migration
+  const configs = buildDefaultProviderConfigs()
+  if (raw.openaiModel || raw.openaiApiKey || raw.openaiBaseUrl) {
+    configs.openai = { model: raw.openaiModel || 'gpt-4o-mini', apiKey: raw.openaiApiKey || '', baseUrl: raw.openaiBaseUrl || 'https://api.openai.com/v1' }
+  }
+  if (raw.anthropicModel || raw.anthropicApiKey) {
+    configs.anthropic = { model: raw.anthropicModel || 'claude-3-5-sonnet-20241022', apiKey: raw.anthropicApiKey || '', baseUrl: 'https://api.anthropic.com' }
+  }
+  if (raw.ollamaModel || raw.ollamaBaseUrl) {
+    configs.ollama = { model: raw.ollamaModel || 'llama3.1', apiKey: '', baseUrl: raw.ollamaBaseUrl || 'http://localhost:11434' }
+  }
+  return {
+    provider: raw.provider || 'demo',
+    providerConfigs: configs,
+    theme: raw.theme || 'newton-dark',
+    fontSize: raw.fontSize || 13,
+    systemPrompt: raw.systemPrompt || DEFAULT_SETTINGS.systemPrompt,
+  }
 }
 
 // ---------- AI SCM ----------
@@ -141,16 +388,6 @@ export interface CodeReviewResponse {
   findings: CodeReviewFinding[]
   summary: string
   score: number // 0-100 code health
-}
-
-export const PROVIDER_MODELS: Record<Exclude<Provider, 'demo'>, string[]> = {
-  openai: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-mini'],
-  anthropic: [
-    'claude-3-5-sonnet-20241022',
-    'claude-3-5-haiku-20241022',
-    'claude-3-opus-20240229',
-  ],
-  ollama: ['llama3.1', 'qwen2.5-coder', 'deepseek-coder-v2', 'mistral'],
 }
 
 // ---------- RecourseOS: Consequence Engine ----------

@@ -6,6 +6,7 @@ import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { ChatRequest, EditRequest, EditResponse, FileNode, ProviderConfig, AgentRequest } from '../shared/types.js'
+import { getProtocol, getProviderDef } from '../shared/types.js'
 import { demoAnswer, streamDemo, demoEdit } from './demoAi.js'
 import { demoPlan, executeStep, llmPlan } from './agent.js'
 import { getIndex, type SearchHit } from './indexing.js'
@@ -308,25 +309,24 @@ app.post('/api/chat', async (req, res) => {
       return done()
     }
 
-    if (provider.provider === 'openai') {
-      if (!provider.apiKey) return fallbackNoKey(send, done, 'OpenAI')
-      await streamOpenai(body, provider, send, ac.signal)
-      return done()
+    // Protocol-based dispatch — works for any provider in the registry.
+    const def = getProviderDef(provider.provider)
+    const proto = getProtocol(provider.provider)
+
+    if (def?.needsKey && !provider.apiKey) {
+      return fallbackNoKey(send, done, def.name)
     }
 
-    if (provider.provider === 'anthropic') {
-      if (!provider.apiKey) return fallbackNoKey(send, done, 'Anthropic')
+    if (proto === 'anthropic') {
       await streamAnthropic(body, provider, send, ac.signal)
       return done()
     }
-
-    if (provider.provider === 'ollama') {
+    if (proto === 'ollama') {
       await streamOllama(body, provider, send, ac.signal)
       return done()
     }
-
-    // unknown provider
-    await streamDemo('Unknown provider — falling back to demo mode.', send, ac.signal)
+    // default: openai-compat (covers OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Together, xAI, Gemini, …)
+    await streamOpenAiCompat(body, provider, send, ac.signal)
     done()
   } catch (e) {
     const msg = (e as Error).message || String(e)
@@ -353,21 +353,29 @@ async function fallbackNoKey(send: (c: string) => void, done: () => void, name: 
   done()
 }
 
-// ----- OpenAI streaming -----
-async function streamOpenai(
+// ----- OpenAI-compatible streaming (covers OpenAI, Groq, Mistral, DeepSeek,
+// OpenRouter, Together, xAI, Gemini, and any other openai-compat endpoint) -----
+async function streamOpenAiCompat(
   body: ChatRequest,
   provider: ProviderConfig,
   send: (c: string) => void,
   signal: AbortSignal,
 ) {
-  const baseUrl = (provider.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
+  const def = getProviderDef(provider.provider)
+  const baseUrl = (provider.baseUrl || def?.defaultBaseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
   const messages = [{ role: 'system', content: await buildSystemPrompt(body) }, ...body.messages]
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${provider.apiKey}`,
+  }
+  // OpenRouter recommends these for analytics + routing
+  if (provider.provider === 'openrouter') {
+    headers['HTTP-Referer'] = 'https://github.com/newton-editor'
+    headers['X-Title'] = 'Newton Editor'
+  }
   const r = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${provider.apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model: provider.model,
       messages,
@@ -378,7 +386,7 @@ async function streamOpenai(
   })
   if (!r.ok || !r.body) {
     const txt = await r.text().catch(() => '')
-    throw new Error(`OpenAI ${r.status}: ${txt.slice(0, 300)}`)
+    throw new Error(`${def?.name ?? provider.provider} ${r.status}: ${txt.slice(0, 300)}`)
   }
   await readSSE(r.body, (line) => {
     if (line === '[DONE]') return
@@ -510,40 +518,7 @@ app.post('/api/edit', async (req, res) => {
       `File: ${body.path ?? '(untitled)'}\nLanguage: ${body.language}\n` +
       `Instruction: ${body.instruction}\n\nCode:\n${body.code}`
 
-    let code = ''
-    if (provider.provider === 'openai') {
-      code = await llmComplete(
-        provider,
-        sys,
-        userMsg,
-        'https://api.openai.com/v1/chat/completions',
-        (j: any) => j.choices?.[0]?.message?.content ?? '',
-        true,
-      )
-    } else if (provider.provider === 'anthropic') {
-      code = await llmComplete(
-        provider,
-        sys,
-        userMsg,
-        'https://api.anthropic.com/v1/messages',
-        (j: any) =>
-          (j.content ?? []).map((b: any) => b.text ?? '').join(''),
-        false,
-        body.path,
-      )
-    } else if (provider.provider === 'ollama') {
-      const baseUrl = (provider.baseUrl || 'http://localhost:11434').replace(/\/$/, '')
-      code = await llmComplete(
-        provider,
-        sys,
-        userMsg,
-        `${baseUrl}/api/chat`,
-        (j: any) => j.message?.content ?? '',
-        false,
-        body.path,
-        true,
-      )
-    }
+    let code = await llmComplete(provider, sys, userMsg)
 
     // strip accidental markdown fences
     code = code.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim()
@@ -554,69 +529,50 @@ app.post('/api/edit', async (req, res) => {
 })
 
 /**
- * Non-streaming LLM "complete" helper used by the edit endpoint.
- * Supports OpenAI-style (messages), Anthropic, and Ollama (NDJSON).
+ * Non-streaming LLM completion helper — fully protocol-driven.
+ * Determines URL, headers, body shape, and response extraction automatically
+ * from the provider registry. Works for any provider.
  */
-async function llmComplete(
-  provider: ProviderConfig,
-  system: string,
-  user: string,
-  url: string,
-  extract: (json: any) => string,
-  isJsonResponse: boolean,
-  _path?: string,
-  isOllama = false,
-): Promise<string> {
+async function llmComplete(provider: ProviderConfig, system: string, user: string): Promise<string> {
+  const def = getProviderDef(provider.provider)
+  const proto = getProtocol(provider.provider)
+  const baseUrl = (provider.baseUrl || def?.defaultBaseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
+
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  let url: string
   let bodyObj: any
 
-  if (url.includes('anthropic.com')) {
+  if (proto === 'anthropic') {
+    url = `${baseUrl}/v1/messages`
     headers['x-api-key'] = provider.apiKey!
     headers['anthropic-version'] = '2023-06-01'
-    bodyObj = {
-      model: provider.model,
-      max_tokens: 4096,
-      system,
-      messages: [{ role: 'user', content: user }],
-      stream: false,
-    }
-  } else if (isOllama) {
-    bodyObj = {
-      model: provider.model,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-      stream: false,
-    }
+    bodyObj = { model: provider.model, max_tokens: 4096, system, messages: [{ role: 'user', content: user }], stream: false }
+  } else if (proto === 'ollama') {
+    url = `${baseUrl}/api/chat`
+    bodyObj = { model: provider.model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], stream: false }
   } else {
-    // OpenAI-compatible
+    // openai-compat (OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Together, xAI, Gemini, …)
+    url = `${baseUrl}/chat/completions`
     headers.Authorization = `Bearer ${provider.apiKey}`
-    bodyObj = {
-      model: provider.model,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-      stream: false,
-      temperature: 0.2,
+    if (provider.provider === 'openrouter') {
+      headers['HTTP-Referer'] = 'https://github.com/newton-editor'
+      headers['X-Title'] = 'Newton Editor'
     }
+    bodyObj = { model: provider.model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], stream: false, temperature: 0.2 }
   }
 
   const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(bodyObj) })
   if (!r.ok) {
     const txt = await r.text().catch(() => '')
-    throw new Error(`${provider.provider} ${r.status}: ${txt.slice(0, 200)}`)
+    throw new Error(`${def?.name ?? provider.provider} ${r.status}: ${txt.slice(0, 200)}`)
   }
 
-  if (isJsonResponse) {
-    const j = await r.json()
-    return extract(j)
-  }
-  // Ollama streams NDJSON even with stream:false? It returns one JSON line.
   const text = await r.text()
   try {
-    return extract(JSON.parse(text))
+    const j = JSON.parse(text)
+    if (proto === 'anthropic') return (j.content ?? []).map((b: any) => b.text ?? '').join('')
+    if (proto === 'ollama') return j.message?.content ?? ''
+    return j.choices?.[0]?.message?.content ?? ''
   } catch {
     return text
   }
@@ -633,25 +589,7 @@ app.post('/api/agent/plan', async (req, res) => {
     }
 
     // Real provider: ask the model for a JSON plan
-    const complete = (sys: string, user: string) =>
-      llmComplete(
-        provider,
-        sys,
-        user,
-        provider.provider === 'openai'
-          ? 'https://api.openai.com/v1/chat/completions'
-          : provider.provider === 'anthropic'
-          ? 'https://api.anthropic.com/v1/messages'
-          : `${(provider.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/api/chat`,
-        (j: any) =>
-          j.choices?.[0]?.message?.content ??
-          (j.content ?? []).map((b: any) => b.text ?? '').join('') ??
-          j.message?.content ??
-          '',
-        provider.provider === 'openai',
-        undefined,
-        provider.provider === 'ollama',
-      )
+    const complete = (sys: string, user: string) => llmComplete(provider, sys, user)
 
     try {
       const plan = await llmPlan(body, complete)
@@ -698,26 +636,7 @@ app.post('/api/nlsh', async (req, res) => {
       'Return ONLY the raw command — no markdown, no explanation, no backticks. ' +
       'Prefer cross-platform commands. If the request is ambiguous, pick the most common interpretation.'
     const user = `Request: ${prompt}\nWorking directory: ${WORKSPACE}\nReturn the shell command only:`
-    const complete = (sys2: string, user2: string) =>
-      llmComplete(
-        p,
-        sys2,
-        user2,
-        p.provider === 'openai'
-          ? 'https://api.openai.com/v1/chat/completions'
-          : p.provider === 'anthropic'
-          ? 'https://api.anthropic.com/v1/messages'
-          : `${(p.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/api/chat`,
-        (j: any) =>
-          j.choices?.[0]?.message?.content ??
-          (j.content ?? []).map((b: any) => b.text ?? '').join('') ??
-          j.message?.content ??
-          '',
-        p.provider === 'openai',
-        undefined,
-        p.provider === 'ollama',
-      )
-    let cmd = await complete(sys, user)
+    let cmd = await llmComplete(p, sys, user)
     cmd = cmd.replace(/```[\w]*\n?/g, '').replace(/```/g, '').trim()
     // take only first line if model added explanation
     cmd = cmd.split('\n')[0].trim()
@@ -811,26 +730,7 @@ app.post('/api/gen-tests', async (req, res) => {
       'Return ONLY the test file code — no explanation. Use the most common testing framework ' +
       'for the language (Jest/Vitest for JS/TS, pytest for Python, etc).'
     const user = `File: ${path}\nLanguage: ${language}\n\nSource code:\n\`\`\`\n${code}\n\`\`\`\n\nGenerate tests:`
-    const complete = (sys2: string, user2: string) =>
-      llmComplete(
-        p,
-        sys2,
-        user2,
-        p.provider === 'openai'
-          ? 'https://api.openai.com/v1/chat/completions'
-          : p.provider === 'anthropic'
-          ? 'https://api.anthropic.com/v1/messages'
-          : `${(p.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/api/chat`,
-        (j: any) =>
-          j.choices?.[0]?.message?.content ??
-          (j.content ?? []).map((b: any) => b.text ?? '').join('') ??
-          j.message?.content ??
-          '',
-        p.provider === 'openai',
-        undefined,
-        p.provider === 'ollama',
-      )
-    let tests = await complete(sys, user)
+    let tests = await llmComplete(p, sys, user)
     tests = tests.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim()
     res.json({ tests, note: `Generated with ${p.provider}.` })
   } catch (e) {
@@ -1092,24 +992,7 @@ app.post('/api/git/suggest-commit', async (req, res) => {
       'Format: type(scope): short description. Types: feat, fix, refactor, docs, test, chore, perf, style, ci, build.'
     const user = `Here is the staged diff. Write a single conventional-commit message.\n\n\`\`\`diff\n${diff.slice(0, 8000)}\n\`\`\``
 
-    const message = await llmComplete(
-      p,
-      system,
-      user,
-      p.provider === 'openai'
-        ? 'https://api.openai.com/v1/chat/completions'
-        : p.provider === 'anthropic'
-        ? 'https://api.anthropic.com/v1/messages'
-        : `${(p.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/api/chat`,
-      (j: any) =>
-        j.choices?.[0]?.message?.content ??
-        (j.content ?? []).map((b: any) => b.text ?? '').join('') ??
-        j.message?.content ??
-        '',
-      p.provider === 'openai',
-      undefined,
-      p.provider === 'ollama',
-    )
+    const message = await llmComplete(p, system, user)
     res.json({ message: message.trim(), note: 'AI-generated commit message.' })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
@@ -1139,24 +1022,7 @@ app.post('/api/git/explain-diff', async (req, res) => {
       'Use bullet points. Note the key changes, any potential risks, and the intent behind the change.'
     const user = `Explain this diff${filePath ? ` for \`${filePath}\`` : ''}:\n\n\`\`\`diff\n${diff.slice(0, 10000)}\n\`\`\``
 
-    const explanation = await llmComplete(
-      p,
-      system,
-      user,
-      p.provider === 'openai'
-        ? 'https://api.openai.com/v1/chat/completions'
-        : p.provider === 'anthropic'
-        ? 'https://api.anthropic.com/v1/messages'
-        : `${(p.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/api/chat`,
-      (j: any) =>
-        j.choices?.[0]?.message?.content ??
-        (j.content ?? []).map((b: any) => b.text ?? '').join('') ??
-        j.message?.content ??
-        '',
-      p.provider === 'openai',
-      undefined,
-      p.provider === 'ollama',
-    )
+    const explanation = await llmComplete(p, system, user)
     res.json({ explanation: explanation.trim() })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
@@ -1194,24 +1060,7 @@ app.post('/api/git/review', async (req, res) => {
       `Review this diff${files.length ? ` (files: ${files.join(', ')})` : ''}:\n\n\`\`\`diff\n${diff.slice(0, 12000)}\n\`\`\`\n\n` +
       `Respond as JSON only.`
 
-    const raw = await llmComplete(
-      p,
-      system,
-      user,
-      p.provider === 'openai'
-        ? 'https://api.openai.com/v1/chat/completions'
-        : p.provider === 'anthropic'
-        ? 'https://api.anthropic.com/v1/messages'
-        : `${(p.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/api/chat`,
-      (j: any) =>
-        j.choices?.[0]?.message?.content ??
-        (j.content ?? []).map((b: any) => b.text ?? '').join('') ??
-        j.message?.content ??
-        '',
-      p.provider === 'openai',
-      undefined,
-      p.provider === 'ollama',
-    )
+    const raw = await llmComplete(p, system, user)
 
     // Try to parse JSON from the response
     let parsed: any
@@ -1472,25 +1321,7 @@ app.post('/api/missions', async (req, res) => {
       plan = demoMissionPlan(goal.trim())
     } else {
       try {
-        const complete = (sys: string, user: string) =>
-          llmComplete(
-            p,
-            sys,
-            user,
-            p.provider === 'openai'
-              ? 'https://api.openai.com/v1/chat/completions'
-              : p.provider === 'anthropic'
-              ? 'https://api.anthropic.com/v1/messages'
-              : `${(p.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/api/chat`,
-            (j: any) =>
-              j.choices?.[0]?.message?.content ??
-              (j.content ?? []).map((b: any) => b.text ?? '').join('') ??
-              j.message?.content ??
-              '',
-            p.provider === 'openai',
-            undefined,
-            p.provider === 'ollama',
-          )
+        const complete = (sys: string, user: string) => llmComplete(p, sys, user)
         plan = await llmMissionPlan(goal.trim(), contextFiles ?? [], complete)
       } catch (e) {
         // fall back to demo plan
