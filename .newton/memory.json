@@ -79,6 +79,22 @@
   ],
   "recentFiles": [
     {
+      "path": "src/utils/debounce.ts",
+      "lastSeen": "2026-06-24T15:55:53.827Z"
+    },
+    {
+      "path": "server/agent.ts",
+      "lastSeen": "2026-06-24T15:54:15.792Z"
+    },
+    {
+      "path": ".env.example",
+      "lastSeen": "2026-06-24T15:53:18.321Z"
+    },
+    {
+      "path": "shared/types.ts",
+      "lastSeen": "2026-06-24T15:52:02.992Z"
+    },
+    {
       "path": "src/components/InlineEditWidget.tsx",
       "lastSeen": "2026-06-24T15:35:34.004Z"
     }

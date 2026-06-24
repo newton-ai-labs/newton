@@ -3,7 +3,7 @@
   "graph": {
     "version": 1,
     "root": "/Users/jessiehermosillo/BetterThanCursor",
-    "builtAt": "2026-06-24T15:35:29.864Z",
+    "builtAt": "2026-06-24T15:59:39.949Z",
     "nodes": {
       "server/agent.ts": {
         "id": "server/agent.ts",
@@ -197,97 +197,193 @@
         "id": "server/demoAi.ts",
         "path": "server/demoAi.ts",
         "language": "typescript",
-        "lineCount": 456,
+        "lineCount": 969,
         "symbols": [
           {
             "name": "Rule",
             "kind": "interface",
             "exported": false,
-            "line": 14
+            "line": 21
           },
           {
             "name": "DemoContext",
             "kind": "interface",
             "exported": false,
-            "line": 19
+            "line": 26
+          },
+          {
+            "name": "codeFenceWithFile",
+            "kind": "function",
+            "exported": false,
+            "line": 37
+          },
+          {
+            "name": "num",
+            "kind": "function",
+            "exported": false,
+            "line": 45
+          },
+          {
+            "name": "vary",
+            "kind": "function",
+            "exported": false,
+            "line": 53
+          },
+          {
+            "name": "quoted",
+            "kind": "function",
+            "exported": false,
+            "line": 58
+          },
+          {
+            "name": "Template",
+            "kind": "interface",
+            "exported": false,
+            "line": 64
           },
           {
             "name": "Counter",
             "kind": "function",
             "exported": true,
-            "line": 62
+            "line": 120
           },
           {
-            "name": "ctx_isShort",
+            "name": "useWindowSize",
+            "kind": "function",
+            "exported": true,
+            "line": 137
+          },
+          {
+            "name": "useSorted",
+            "kind": "function",
+            "exported": true,
+            "line": 155
+          },
+          {
+            "name": "compose",
+            "kind": "variable",
+            "exported": true,
+            "line": 302
+          },
+          {
+            "name": "EventEmitter",
+            "kind": "class",
+            "exported": true,
+            "line": 313
+          },
+          {
+            "name": "LinkedList",
+            "kind": "class",
+            "exported": true,
+            "line": 357
+          },
+          {
+            "name": "ctxIsShort",
             "kind": "function",
             "exported": false,
-            "line": 161
+            "line": 536
           },
           {
             "name": "reviewCode",
             "kind": "function",
             "exported": false,
-            "line": 165
+            "line": 542
           },
           {
             "name": "inferLang",
             "kind": "function",
             "exported": false,
-            "line": 203
+            "line": 598
+          },
+          {
+            "name": "Analysis",
+            "kind": "interface",
+            "exported": false,
+            "line": 622
           },
           {
             "name": "analyze",
             "kind": "function",
             "exported": false,
-            "line": 221
+            "line": 630
+          },
+          {
+            "name": "isCommented",
+            "kind": "function",
+            "exported": false,
+            "line": 728
+          },
+          {
+            "name": "Fn",
+            "kind": "interface",
+            "exported": false,
+            "line": 732
+          },
+          {
+            "name": "extractFunctions",
+            "kind": "function",
+            "exported": false,
+            "line": 738
+          },
+          {
+            "name": "extractBalanced",
+            "kind": "function",
+            "exported": false,
+            "line": 764
+          },
+          {
+            "name": "firstLine",
+            "kind": "function",
+            "exported": false,
+            "line": 778
+          },
+          {
+            "name": "describeFunction",
+            "kind": "function",
+            "exported": false,
+            "line": 782
           },
           {
             "name": "summarize",
             "kind": "function",
             "exported": false,
-            "line": 252
+            "line": 793
           },
           {
             "name": "explainWalkthrough",
             "kind": "function",
             "exported": false,
-            "line": 269
+            "line": 805
           },
           {
             "name": "demoAnswer",
             "kind": "function",
             "exported": true,
-            "line": 283
+            "line": 834
           },
           {
             "name": "demoEdit",
             "kind": "function",
             "exported": true,
-            "line": 312
+            "line": 861
           },
           {
             "name": "addComments",
             "kind": "function",
             "exported": false,
-            "line": 379
-          },
-          {
-            "name": "describeFn",
-            "kind": "function",
-            "exported": false,
-            "line": 411
+            "line": 914
           },
           {
             "name": "addTsTypes",
             "kind": "function",
             "exported": false,
-            "line": 417
+            "line": 941
           },
           {
             "name": "streamDemo",
             "kind": "function",
             "exported": true,
-            "line": 444
+            "line": 962
           }
         ],
         "rawImports": [
@@ -305,7 +401,7 @@
         "id": "server/index.ts",
         "path": "server/index.ts",
         "language": "typescript",
-        "lineCount": 1590,
+        "lineCount": 1595,
         "symbols": [
           {
             "name": "resolveWorkspace",
@@ -335,85 +431,85 @@
             "name": "fallbackNoKey",
             "kind": "function",
             "exported": false,
-            "line": 340
+            "line": 345
           },
           {
             "name": "streamOpenai",
             "kind": "function",
             "exported": false,
-            "line": 352
+            "line": 357
           },
           {
             "name": "streamAnthropic",
             "kind": "function",
             "exported": false,
-            "line": 391
+            "line": 396
           },
           {
             "name": "streamOllama",
             "kind": "function",
             "exported": false,
-            "line": 431
+            "line": 436
           },
           {
             "name": "readSSE",
             "kind": "function",
             "exported": false,
-            "line": 465
+            "line": 470
           },
           {
             "name": "llmComplete",
             "kind": "function",
             "exported": false,
-            "line": 555
+            "line": 560
           },
           {
             "name": "demoNlsh",
             "kind": "function",
             "exported": false,
-            "line": 726
+            "line": 731
           },
           {
             "name": "demoTests",
             "kind": "function",
             "exported": false,
-            "line": 837
+            "line": 842
           },
           {
             "name": "GitFileChange",
             "kind": "interface",
             "exported": false,
-            "line": 872
+            "line": 877
           },
           {
             "name": "GitStatus",
             "kind": "interface",
             "exported": false,
-            "line": 882
+            "line": 887
           },
           {
             "name": "git",
             "kind": "function",
             "exported": false,
-            "line": 895
+            "line": 900
           },
           {
             "name": "demoCommitMessage",
             "kind": "function",
             "exported": false,
-            "line": 1237
+            "line": 1242
           },
           {
             "name": "demoExplainDiff",
             "kind": "function",
             "exported": false,
-            "line": 1265
+            "line": 1270
           },
           {
             "name": "demoCodeReview",
             "kind": "function",
             "exported": false,
-            "line": 1294
+            "line": 1299
           }
         ],
         "rawImports": [
@@ -1186,25 +1282,25 @@
         "id": "src/components/ChatPanel.tsx",
         "path": "src/components/ChatPanel.tsx",
         "language": "typescript",
-        "lineCount": 469,
+        "lineCount": 504,
         "symbols": [
           {
             "name": "ChatPanel",
             "kind": "function",
             "exported": true,
-            "line": 34
+            "line": 35
           },
           {
             "name": "Message",
             "kind": "function",
             "exported": false,
-            "line": 367
+            "line": 368
           },
           {
             "name": "CodeBlock",
             "kind": "function",
             "exported": false,
-            "line": 416
+            "line": 417
           }
         ],
         "rawImports": [
@@ -1798,7 +1894,7 @@
         "id": "src/store.ts",
         "path": "src/store.ts",
         "language": "typescript",
-        "lineCount": 1208,
+        "lineCount": 1246,
         "symbols": [
           {
             "name": "EditorTab",
@@ -1828,67 +1924,67 @@
             "name": "SearchHit",
             "kind": "interface",
             "exported": true,
-            "line": 180
+            "line": 183
           },
           {
             "name": "AttachedFile",
             "kind": "interface",
             "exported": true,
-            "line": 191
+            "line": 194
           },
           {
             "name": "RepoGraphData",
             "kind": "interface",
             "exported": true,
-            "line": 197
+            "line": 200
           },
           {
             "name": "GitFileChange",
             "kind": "interface",
             "exported": true,
-            "line": 215
+            "line": 218
           },
           {
             "name": "GitStatusData",
             "kind": "interface",
             "exported": true,
-            "line": 222
+            "line": 225
           },
           {
             "name": "langFromPath",
             "kind": "function",
             "exported": true,
-            "line": 232
+            "line": 235
           },
           {
             "name": "guessTestPath",
             "kind": "function",
             "exported": false,
-            "line": 271
+            "line": 274
           },
           {
             "name": "providerConfig",
             "kind": "function",
             "exported": false,
-            "line": 279
+            "line": 282
           },
           {
             "name": "useStore",
             "kind": "variable",
             "exported": true,
-            "line": 308
+            "line": 311
           },
           {
             "name": "loadSettings",
             "kind": "function",
             "exported": false,
-            "line": 1193
+            "line": 1231
           },
           {
             "name": "saveSettings",
             "kind": "function",
             "exported": false,
-            "line": 1202
+            "line": 1240
           }
         ],
         "rawImports": [
@@ -1903,6 +1999,23 @@
           "zustand",
           "nanoid"
         ]
+      },
+      "src/utils/debounce.ts": {
+        "id": "src/utils/debounce.ts",
+        "path": "src/utils/debounce.ts",
+        "language": "typescript",
+        "lineCount": 8,
+        "symbols": [
+          {
+            "name": "debounce",
+            "kind": "function",
+            "exported": true,
+            "line": 2
+          }
+        ],
+        "rawImports": [],
+        "imports": [],
+        "externalDeps": []
       },
       "src/vite-env.d.ts": {
         "id": "src/vite-env.d.ts",
@@ -2234,27 +2347,27 @@
       ]
     },
     "stats": {
-      "fileCount": 31,
-      "symbolCount": 216,
+      "fileCount": 32,
+      "symbolCount": 233,
       "edgeCount": 38,
       "externalDepCount": 25,
       "languages": {
-        "typescript": 30,
+        "typescript": 31,
         "javascript": 1
       }
     }
   },
   "mtimes": {
     "server/agent.ts": 1782303086249.7732,
-    "server/demoAi.ts": 1782302099313.9224,
-    "server/index.ts": 1782313013395.0576,
+    "server/demoAi.ts": 1782316770405.3591,
+    "server/index.ts": 1782316152165.6978,
     "server/indexing.ts": 1782308216498.0393,
     "server/memory.ts": 1782312042983.5276,
     "server/repoGraph.ts": 1782311634477.6956,
     "shared/types.ts": 1782312856409.4438,
     "src/App.tsx": 1782314271506.4272,
     "src/components/AgentPanel.tsx": 1782313162598.5464,
-    "src/components/ChatPanel.tsx": 1782308544346.917,
+    "src/components/ChatPanel.tsx": 1782316109241.3164,
     "src/components/CommandPalette.tsx": 1782301171134.1099,
     "src/components/EditorArea.tsx": 1782302876326.7422,
     "src/components/FileExplorer.tsx": 1782300996400.9326,
@@ -2267,7 +2380,7 @@
     "src/components/fileIcons.tsx": 1782301435550.8054,
     "src/ghostCompletions.ts": 1782302830151.2844,
     "src/main.tsx": 1782300922019.6328,
-    "src/store.ts": 1782314146640.933,
+    "src/store.ts": 1782316038718.4146,
     "src/vite-env.d.ts": 1782303399107.9153,
     "vite.config.d.ts": 1782301485334.896,
     "vite.config.js": 1782301485322.439,
@@ -2275,6 +2388,7 @@
     "src/components/MemoryPanel.tsx": 1782312521054.8235,
     "server/consequence.ts": 1782313060172.0427,
     "server/mission.ts": 1782313071767.0898,
-    "src/components/MissionPanel.tsx": 1782314238801.7139
+    "src/components/MissionPanel.tsx": 1782314238801.7139,
+    "src/utils/debounce.ts": 1782316553793.936
   }
 }
