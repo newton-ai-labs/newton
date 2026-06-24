@@ -295,15 +295,69 @@ select {
 }
 .tab-bar {
   display: flex;
+  align-items: stretch;
+  justify-content: space-between;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
   flex-shrink: 0;
-  scrollbar-width: thin;
-  min-height: 36px;
+  min-height: 40px;
 }
-.tab-bar::-webkit-scrollbar {
+.tab-bar-tabs {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  flex: 1;
+}
+.tab-bar-tabs::-webkit-scrollbar {
   height: 3px;
+}
+.tab-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-soft);
+}
+/* Compact action button that lives in the tab bar's right edge */
+.tab-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  border-radius: 5px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  transition: all 0.15s;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tab-action-btn:hover:not(:disabled) {
+  background: rgba(124, 92, 255, 0.12);
+  border-color: rgba(124, 92, 255, 0.35);
+  color: var(--accent-2);
+}
+.tab-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tab-action-btn.busy {
+  animation: pulse-btn 1.2s ease-in-out infinite;
+  color: var(--accent-2);
+}
+/* Slim breadcrumb bar below tabs */
+.breadcrumb-bar {
+  display: flex;
+  align-items: center;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border-soft);
+  padding: 0 12px;
+  flex-shrink: 0;
+  min-height: 26px;
 }
 .tab {
   display: flex;
@@ -372,12 +426,8 @@ select {
   display: flex;
   align-items: center;
   gap: 0;
-  padding: 5px 16px;
-  background: var(--bg-1);
-  border-bottom: 1px solid var(--border-soft);
   font-size: 11.5px;
   color: var(--text-faint);
-  flex-shrink: 0;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -407,6 +457,12 @@ select {
 .bc-last {
   color: var(--text-dim);
   font-weight: 500;
+}
+
+/* pulse animation for busy buttons */
+@keyframes pulse-btn {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
 }
 
 /* ============ EMPTY STATE ============ */
@@ -2740,25 +2796,6 @@ to {
 }
 .voice-send-btn:not(:disabled):hover {
   opacity: 0.9;
-}
-
-/* ============ GEN TESTS BUTTON ============ */
-.gen-tests-btn {
-  display: flex !important;
-  align-items: center;
-  gap: 4px;
-  background: rgba(168, 123, 255, 0.12);
-  color: var(--accent) !important;
-  padding: 2px 8px !important;
-  border-radius: 4px;
-  font-size: 11px;
-}
-.gen-tests-btn:hover {
-  background: rgba(168, 123, 255, 0.22);
-}
-.gen-tests-btn:disabled {
-  opacity: 0.6;
-  cursor: wait;
 }
 
 /* ============ MISC ============ */

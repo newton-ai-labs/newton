@@ -9,6 +9,7 @@ import {
   PanelRight,
   Plus,
   Wand2,
+  FlaskConical,
 } from 'lucide-react'
 import { useStore } from '../store'
 import type { FileNode } from '../../shared/types'
@@ -36,6 +37,7 @@ export default function CommandPalette() {
   const createFile = useStore((s) => s.createFile)
   const sendMessage = useStore((s) => s.sendMessage)
   const setComposerOpen = useStore((s) => s.setComposerOpen)
+  const generateTests = useStore((s) => s.generateTests)
 
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
@@ -105,8 +107,16 @@ export default function CommandPalette() {
         run: () => setComposerOpen(true),
         group: 'Commands',
       },
+      {
+        id: 'gen-tests',
+        label: 'AI: Generate Unit Tests for current file',
+        hint: '⌘⇧T',
+        icon: FlaskConical,
+        run: () => generateTests(),
+        group: 'Commands',
+      },
     ],
-    [saveActiveTab, setSettingsOpen, setSidebarVisible, setChatVisible, sidebarVisible, chatVisible, sendMessage, setComposerOpen],
+    [saveActiveTab, setSettingsOpen, setSidebarVisible, setChatVisible, sidebarVisible, chatVisible, sendMessage, setComposerOpen, generateTests],
   )
 
   const results = useMemo(() => {

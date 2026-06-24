@@ -39,3 +39,4 @@ pnpm-debug.log*
 .ai-cache/
 localStorage-dump.json
 .newton-index.json
+.newton/

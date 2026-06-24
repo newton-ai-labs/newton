@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import Editor, { type OnMount, type BeforeMount } from '@monaco-editor/react'
 import type { editor } from 'monaco-editor'
 import type * as MonacoNs from 'monaco-editor'
-import { X, Sparkles, ChevronRight } from 'lucide-react'
+import { X, Sparkles, ChevronRight, FlaskConical, Command } from 'lucide-react'
 import { useStore, type EditorTab } from '../store'
 import { fileIcon, fileColor } from './fileIcons'
 import InlineEditWidget from './InlineEditWidget'
@@ -18,6 +18,9 @@ export default function EditorArea() {
   const saveActiveTab = useStore((s) => s.saveActiveTab)
   const settings = useStore((s) => s.settings)
   const setSettingsOpen = useStore((s) => s.setSettingsOpen)
+  const setPaletteOpen = useStore((s) => s.setPaletteOpen)
+  const generateTests = useStore((s) => s.generateTests)
+  const genTestsBusy = useStore((s) => s.genTestsBusy)
 
   const active = tabs.find((t) => t.id === activeTabId) ?? null
   if (!active) {
@@ -37,7 +40,14 @@ export default function EditorArea() {
                 <Sparkles size={12} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                 Configure AI
               </button>
+              <button className="chip-btn" onClick={() => setPaletteOpen(true)}>
+                <Command size={12} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                ⌘P Commands
+              </button>
             </div>
+            <p style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 4 }}>
+              Tip: Open a file and press <code style={{ background: 'var(--panel-3)', borderRadius: 3, padding: '1px 5px', fontFamily: 'monospace', fontSize: 11 }}>⌘⇧T</code> or use the toolbar button to generate tests with AI.
+            </p>
           </div>
         </div>
       </div>
@@ -47,17 +57,32 @@ export default function EditorArea() {
   return (
     <div className="editor-area">
       <div className="tab-bar">
-        {tabs.map((t) => (
-          <Tab
-            key={t.id}
-            tab={t}
-            active={t.id === activeTabId}
-            onClick={() => setActiveTab(t.id)}
-            onClose={() => closeTab(t.id)}
-          />
-        ))}
+        <div className="tab-bar-tabs">
+          {tabs.map((t) => (
+            <Tab
+              key={t.id}
+              tab={t}
+              active={t.id === activeTabId}
+              onClick={() => setActiveTab(t.id)}
+              onClose={() => closeTab(t.id)}
+            />
+          ))}
+        </div>
+        <div className="tab-bar-actions">
+          <button
+            className={`tab-action-btn ${genTestsBusy ? 'busy' : ''}`}
+            title="Generate unit tests for this file (⌘⇧T)"
+            onClick={() => generateTests()}
+            disabled={genTestsBusy}
+          >
+            <FlaskConical size={13} />
+            <span>{genTestsBusy ? 'Generating…' : 'Tests'}</span>
+          </button>
+        </div>
       </div>
-      <Breadcrumb path={active.path} />
+      <div className="breadcrumb-bar">
+        <Breadcrumb path={active.path} />
+      </div>
       <div className="editor-host">
         <CodeView
           key={active.id}

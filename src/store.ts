@@ -709,17 +709,21 @@ export const useStore = create<NewtonState>((set, get) => ({
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const data = await r.json()
-      if (data.tests) {
-        const testPath = guessTestPath(tab.path)
-        await get().createFile(testPath, 'file')
-        await fetch('/api/file', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: testPath, content: data.tests }),
-        })
-        await get().openFile(testPath)
-        get().toast(`Generated tests → ${testPath}`)
+      const tests: string | undefined = data.tests
+      if (!tests || !tests.trim()) {
+        throw new Error(data.error || data.note || 'AI returned no tests')
       }
+      const testPath = guessTestPath(tab.path)
+      // Write the test file in one shot (creates dirs + file), then refresh + open
+      const writeRes = await fetch('/api/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: testPath, content: tests }),
+      })
+      if (!writeRes.ok) throw new Error(`Failed to write test file: HTTP ${writeRes.status}`)
+      await get().refreshTree()
+      await get().openFile(testPath)
+      get().toast(`Generated tests → ${testPath}`)
     } catch (e) {
       get().toast(`Test gen failed: ${(e as Error).message}`)
     } finally {

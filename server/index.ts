@@ -962,39 +962,214 @@ app.post('/api/gen-tests', async (req, res) => {
   }
 })
 
-/** Demo-mode test scaffold generator. */
+/** Demo-mode test scaffold generator — produces meaningful, runnable test scaffolds. */
 function demoTests(code: string, filePath: string, language: string): string {
   const base = path.basename(filePath, path.extname(filePath))
   const ext = path.extname(filePath)
 
+  // ---- Python ----
   if (language === 'python') {
-    const funcs = [...code.matchAll(/def\s+(\w+)\s*\(([^)]*)\)/g)]
-    const testFns = funcs.map((m) => {
-      const name = m[1]
-      return `def test_${name}():\n    result = ${name}()\n    assert result is not None  # TODO: expected value`
-    }).join('\n\n')
-    return `import pytest\nfrom ${base} import *\n\n${testFns || 'def test_placeholder():\n    assert True'}\n`
+    // Extract function names + params
+    const funcs = [...code.matchAll(/def\s+(\w+)\s*\(([^)]*)\)/g)].map((m) => ({
+      name: m[1],
+      params: (m[2] || '')
+        .split(',')
+        .map((p) => p.trim().split(':')[0].split('=')[0].trim())
+        .filter((p) => p && p !== 'self'),
+    }))
+
+    const hasClass = /^\s*class\s+\w+/m.test(code)
+    const className = hasClass ? (code.match(/class\s+(\w+)/)?.[1] ?? 'Subject') : null
+
+    if (funcs.length === 0) {
+      return `import pytest\nfrom ${base} import *\n\ndef test_module_imports():\n    """Verify the module loads without errors."""\n    import ${base}\n    assert ${base} is not None\n`
+    }
+
+    const testFns = funcs
+      .filter((f) => !f.name.startsWith('_'))
+      .map((f) => {
+        const args = f.params.length > 0 ? '\n        # TODO: provide realistic arguments\n        ' + f.params.map((p) => `${p}=${guessDefaultPython(p)}`).join(', ') : ''
+        return `def test_${f.name}():\n    """Test ${f.name} runs and returns a value."""\n    result = ${className ? `${className}().` : ''}${f.name}(${args.trim()})\n    assert result is not None  # TODO: assert expected value`
+      })
+      .join('\n\n\n')
+
+    return `import pytest\nfrom ${base} import ${className ? className + ', ' : ''}${funcs.map((f) => f.name).join(', ')}\n\n\n${testFns}\n`
   }
 
-  // JS/TS
+  // ---- JS/TS ----
   const isTs = ext === '.ts' || ext === '.tsx'
-  const funcs = [...code.matchAll(/export\s+(?:async\s+)?function\s+(\w+)/g), ...code.matchAll(/export\s+const\s+(\w+)\s*=/g)]
-  const fnNames = funcs.map((m) => m[1]).filter((n) => !/^[A-Z]/.test(n) || ext === '.tsx')
+  const isJsx = ext === '.tsx' || ext === '.jsx'
+  const hasDefaultExport = /export\s+default\s+/.test(code)
 
-  const testCases = fnNames.length > 0
-    ? fnNames.map((n) => `  it('${n} should work', () => {\n    // TODO: import and test\n    expect(typeof ${n}).toBeDefined()\n  })`).join('\n\n')
-    : `  it('module loads', () => {\n    expect(true).toBe(true)\n  })`
+  // Extract exported functions with their params
+  const exportedFns: { name: string; params: string[]; isAsync: boolean; isArrow: boolean }[] = []
+  for (const m of code.matchAll(/export\s+(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)/g)) {
+    exportedFns.push({
+      name: m[1],
+      params: parseParams(m[2] || ''),
+      isAsync: /async/.test(m[0]),
+      isArrow: false,
+    })
+  }
+  for (const m of code.matchAll(/export\s+const\s+(\w+)\s*=\s*(?:async\s*)?\(?\s*([^)=]*)\)?\s*=>/g)) {
+    exportedFns.push({
+      name: m[1],
+      params: parseParams(m[2] || ''),
+      isAsync: /async/.test(m[0]),
+      isArrow: true,
+    })
+  }
 
-  const importLine = isTs
-    ? `import { ${fnNames.join(', ') || 'placeholder'} } from './${base}'`
-    : `const { ${fnNames.join(', ') || 'placeholder'} } = require('./${base}')`
+  // Extract exported consts (non-function values)
+  const exportedConsts: { name: string; value: string }[] = []
+  for (const m of code.matchAll(/export\s+const\s+(\w+)\s*=\s*([^;\n]+)/g)) {
+    const name = m[1]
+    const value = m[2].trim()
+    // Skip if it's a function/arrow (already captured above)
+    if (/=>|\bfunction\b/.test(value)) continue
+    if (/^[A-Z]\w*/.test(name) && isJsx) continue // React component, handle below
+    exportedConsts.push({ name, value })
+  }
+
+  // Detect React components (PascalCase exports in tsx/jsx)
+  const components: { name: string; props: string[] }[] = []
+  if (isJsx) {
+    for (const m of code.matchAll(/(?:export\s+(?:default\s+)?(?:function|const)\s+([A-Z]\w*)\s*(?:\(\s*\{([^}]*)\}\s*\)|\(([^)]*)\))?)/g)) {
+      const name = m[1]
+      const propsRaw = m[2] || m[3] || ''
+      components.push({ name, props: parseParams(propsRaw) })
+    }
+  }
+
+  const allNames = [
+    ...exportedFns.map((f) => f.name),
+    ...exportedConsts.map((c) => c.name),
+    ...components.map((c) => c.name),
+  ]
+
+  // Build imports
+  let importLine: string
+  const importNames = allNames.length > 0 ? allNames.join(', ') : ''
+  if (hasDefaultExport) {
+    const defaultName = 'DefaultExport'
+    importLine = isTs
+      ? `import ${defaultName}${importNames ? `, { ${importNames} }` : ''} from './${base}'`
+      : `const ${defaultName}${importNames ? `, { ${importNames} }` : ''} = require('./${base}')`
+  } else if (importNames) {
+    importLine = isTs
+      ? `import { ${importNames} } from './${base}'`
+      : `const { ${importNames} } = require('./${base}')`
+  } else {
+    importLine = isTs
+      ? `import * as ${base.replace(/[^a-zA-Z0-9]/g, '_')} from './${base}'`
+      : `const mod = require('./${base}')`
+  }
+
+  // Build test cases
+  const testCases: string[] = []
+
+  // Module import test (always first — catches syntax errors)
+  testCases.push(`  it('module exports are defined', () => {
+${allNames.length > 0
+      ? allNames.map((n) => `    expect(${n}).toBeDefined()`).join('\n')
+      : `    // Module has no named exports, but should still load\n    expect(true).toBe(true)`}
+  })`)
+
+  // Function tests
+  for (const fn of exportedFns) {
+    if (fn.name.startsWith('_')) continue
+    const callArgs = fn.params.map((p) => guessDefaultJS(p, code)).join(', ')
+    const awaitKw = fn.isAsync ? 'await ' : ''
+    const returnType = inferReturnType(code, fn.name)
+    testCases.push(`  it('${fn.name} ${fn.isAsync ? 'resolves' : 'returns'} expected ${returnType || 'value'}', async () => {
+    const result = ${awaitKw}${fn.name}(${callArgs})
+    ${returnType === 'array' ? 'expect(Array.isArray(result)).toBe(true)' : returnType === 'number' ? 'expect(typeof result).toBe(\'number\')' : returnType === 'string' ? 'expect(typeof result).toBe(\'string\')' : returnType === 'boolean' ? 'expect(typeof result).toBe(\'boolean\')' : returnType === 'object' ? 'expect(result).toEqual(expect.any(Object))' : 'expect(result).toBeDefined() // TODO: assert expected value'}
+  })`)
+  }
+
+  // Const value tests
+  for (const c of exportedConsts) {
+    if (c.name.startsWith('_')) continue
+    const valType = guessValueType(c.value)
+    testCases.push(`  it('${c.name} has correct value type', () => {
+    expect(${c.name}).${valType.assertion}
+  })`)
+  }
+
+  // React component tests
+  for (const comp of components) {
+    testCases.push(`  it('${comp.name} renders without crashing', () => {
+    ${isJsx ? `// Requires @testing-library/react in your devDependencies
+    // import { render } from '@testing-library/react'
+    // render(<${comp.name} ${comp.props.map((p) => `${p}={${guessDefaultJS(p, code)}}`).join(' ')} />)
+    expect(typeof ${comp.name}).toBe('function')` : `expect(typeof ${comp.name}).toBe('function')`}
+  })`)
+  }
 
   return `${importLine}
 
 describe('${base}', () => {
-${testCases}
+${testCases.join('\n\n')}
 })
 `
+
+  // ---- helpers (IIFE-scoped) ----
+  function parseParams(raw: string): string[] {
+    return raw
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => {
+        // Handle TypeScript type annotations: "name: type" or destructured "{ a, b }"
+        if (p.startsWith('{')) return p // destructured — keep as-is
+        return p.split(':')[0].split('=')[0].split('?')[0].trim()
+      })
+      .filter((p) => p && p !== 'this' && p !== 'self')
+  }
+
+  function guessDefaultJS(paramName: string, source: string): string {
+    const p = paramName.replace(/[{}]/g, '').trim()
+    if (!p) return 'undefined'
+    if (/^(id|idx|index|count|num|n|len|length|size)$/i.test(p)) return '0'
+    if (/^(name|title|label|text|str|string|key|path|url|href|email|message|msg)$/i.test(p)) return "'sample'"
+    if (/^(is|has|can|should|enabled|active|visible|checked|open)/i.test(p)) return 'false'
+    if (/^(items|list|arr|array|data|values|rows|entries)$/i.test(p)) return '[]'
+    if (/^(options|config|props|settings|params|obj|item|user|model)/i.test(p)) return '{}'
+    if (/^(callback|cb|fn|handler|onClick|onChange|onSubmit)$/i.test(p)) return 'jest.fn()'
+    if (/^(event|e)$/i.test(p)) return '{} as any // mock event'
+    return 'undefined'
+  }
+
+  function guessDefaultPython(paramName: string): string {
+    const p = paramName.trim()
+    if (!p) return 'None'
+    if (/^(id|idx|index|count|num|n|len|length|size)$/i.test(p)) return '0'
+    if (/^(name|title|label|text|str|string|key|path|url|email|message)$/i.test(p)) return "'sample'"
+    if (/^(is|has|can|should|enabled|active)/i.test(p)) return 'False'
+    if (/^(items|list|arr|array|data|values|rows)$/i.test(p)) return '[]'
+    if (/^(options|config|props|settings|params|obj)/i.test(p)) return '{}'
+    return 'None'
+  }
+
+  function inferReturnType(source: string, fnName: string): string {
+    // Look for explicit return type annotation: function foo(): Type
+    const typeMatch = source.match(new RegExp(`function\\s+${fnName}\\s*\\([^)]*\\)\\s*:\\s*(\\w+)`))
+    if (typeMatch) return typeMatch[1].toLowerCase()
+    // Look for arrow with return type
+    const arrowMatch = source.match(new RegExp(`${fnName}\\s*=\\s*(?:async\\s*)?\\([^)]*\\)\\s*:\\s*(\\w+)`))
+    if (arrowMatch) return arrowMatch[1].toLowerCase()
+    return ''
+  }
+
+  function guessValueType(value: string): { assertion: string } {
+    const v = value.trim()
+    if (/^['"`]/.test(v)) return { assertion: 'toEqual(expect.any(String))' }
+    if (/^-?\d+(\.\d+)?$/.test(v)) return { assertion: 'toEqual(expect.any(Number))' }
+    if (v === 'true' || v === 'false') return { assertion: 'toEqual(expect.any(Boolean))' }
+    if (/^\[/.test(v)) return { assertion: 'toEqual(expect.any(Array))' }
+    if (/^\{/.test(v)) return { assertion: 'toEqual(expect.any(Object))' }
+    return { assertion: 'toBeDefined()' }
+  }
 }
 
 // ---------- diagnostics (TypeScript / lint problems) ----------
@@ -1994,9 +2169,20 @@ if (existsSync(distDir)) {
   app.get('*', (_req, res) => res.sendFile(path.join(distDir, 'index.html')))
 }
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`\n  Newton editor backend on http://localhost:${PORT}`)
   // eslint-disable-next-line no-console
   console.log(`  Workspace: ${WORKSPACE}\n`)
+})
+
+server.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n  ✗ Port ${PORT} is already in use.`)
+    console.error(`    Another Newton backend may already be running.`)
+    console.error(`    Run: lsof -ti:${PORT} | xargs kill -9\n`)
+  } else {
+    console.error('Server error:', err)
+  }
+  process.exit(1)
 })
