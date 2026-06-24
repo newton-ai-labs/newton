@@ -6,6 +6,17 @@ Works out-of-the-box in **Demo mode** (no API key needed), and supports **OpenAI
 
 ---
 
+## 📚 Documentation
+
+| Doc | Description |
+|---|---|
+| **[Architecture](docs/ARCHITECTURE.md)** | How the frontend, backend, and AI providers fit together |
+| **[API Reference](docs/API.md)** | Every endpoint, request body, and response schema |
+| **[Semantic Search](docs/SEMANTIC_SEARCH.md)** | Deep dive into the TF-IDF codebase indexer |
+| **[Contributing](CONTRIBUTING.md)** | Setup, code style, and areas for contribution |
+
+---
+
 ## ✨ Features
 
 ### 🔍 Semantic Codebase Search & @-Mentions — *Innovation*

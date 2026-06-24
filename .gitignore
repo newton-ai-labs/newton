@@ -38,3 +38,4 @@ pnpm-debug.log*
 # AI / local data
 .ai-cache/
 localStorage-dump.json
+.newton-index.json
