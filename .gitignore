@@ -9,8 +9,10 @@ dist-ssr/
 build/
 *.tsbuildinfo
 
-# Vite cache
+# Vite cache & compiled config artifacts
 .vite/
+vite.config.d.ts
+vite.config.js
 
 # Environment & secrets
 .env

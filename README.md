@@ -59,10 +59,11 @@ Works out-of-the-box in **Demo mode** (no API key needed), and supports **OpenAI
 
 | Shortcut | Action |
 |---|---|
-| `⌘P` / `⌘K` | Command palette |
+| `⌘P` | Command palette (fuzzy file find + commands) |
 | `⌘S` | Save file |
 | `⌘B` | Toggle sidebar |
 | `⌘J` | Toggle AI panel |
+| `⌘K` | Inline AI edit (highlight code first) |
 | `⌘,` | Settings |
 | `⌃\`` | Toggle terminal |
 | `⌘⇧V` | Voice coding |
@@ -73,21 +74,69 @@ Works out-of-the-box in **Demo mode** (no API key needed), and supports **OpenAI
 
 ## 🚀 Quick Start
 
+### Prerequisites
+- **Node.js 18+** and npm
+- A terminal / command prompt
+
+### Development
+
 ```bash
+# 1. Clone the repo
+git clone https://github.com/newton-ai-labs/newton.git
+cd newton
+
+# 2. Install dependencies
 npm install
+
+# 3. Start both the frontend and backend
 npm run dev
 ```
 
-Then open **http://localhost:5173**.
+This launches **two processes** via `concurrently`:
+- **Frontend (client):** Vite dev server on **http://localhost:5173**
+- **Backend (server):** Express API on **http://localhost:8787**
 
-The app starts in **Demo mode** — every AI feature works with built-in simulated responses. To use real models, open **Settings (⌘,)** and choose a provider:
+Vite proxies all `/api/*` requests to the backend automatically, so you only need to open the frontend URL: **http://localhost:5173**.
+
+> 💡 The app starts in **Demo mode** — every AI feature works with built-in simulated responses. To use real models, open **Settings (⌘,)** and choose a provider.
+
+### Production
+
+```bash
+# Build the frontend (outputs to dist/)
+npm run build
+
+# Start the production server (serves built frontend + API on one port)
+npm start
+```
+
+Then open **http://localhost:8787** — the Express server serves both the API and the built React app.
+
+---
+
+## 🔧 Configuration
+
+### AI Providers
 
 | Provider | Needs | Notes |
 |---|---|---|
-| **Demo** | Nothing | Built-in simulated AI |
+| **Demo** | Nothing | Built-in simulated AI — works instantly |
 | **OpenAI** | API key | GPT-4o, GPT-4o-mini, o1… |
 | **Anthropic** | API key | Claude 3.5 Sonnet / Haiku |
 | **Ollama** | Local Ollama | Run fully offline |
+
+API keys are configured via the **Settings** panel (gear icon or `⌘,`) and stored in your browser's `localStorage`.
+
+### Environment Variables (optional)
+
+The backend reads optional environment variables from a `.env` file (see `.env.example`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `NEWTON_PORT` | `8787` | Backend server port |
+| `NEWTON_WORKSPACE` | Current directory | Root directory for the file explorer |
+
+> Note: Server-side API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) are used only by the `/api/health` endpoint for status reporting. Actual AI requests use keys from the client Settings panel.
 
 ---
 
@@ -95,20 +144,21 @@ The app starts in **Demo mode** — every AI feature works with built-in simulat
 
 ```
 client (React + Vite + Zustand + Monaco)
-  ↕
-server (Express)
-  ├── /api/files      — file tree
-  ├── /api/file       — read / write / delete
-  ├── /api/chat       — streaming AI chat (SSE)
-  ├── /api/edit       — inline AI edit
-  ├── /api/copilot    — ghost-text completion
-  ├── /api/agent/*    — plan + apply agent steps
-  ├── /api/nlsh       — natural-language → shell
-  ├── /api/exec       — run shell command
-  └── /api/gen-tests  — AI test generation
+  ↕  (Vite proxy: /api → localhost:8787)
+server (Express + tsx)
+  ├── /api/files         — file tree
+  ├── /api/file          — read / write / delete / rename / create
+  ├── /api/chat          — streaming AI chat (SSE)
+  ├── /api/edit          — inline AI edit (⌘K)
+  ├── /api/copilot       — ghost-text completion
+  ├── /api/agent/*       — plan + apply agent steps
+  ├── /api/nlsh          — natural-language → shell
+  ├── /api/exec          — run shell command
+  ├── /api/gen-tests     — AI test generation
+  └── /api/health        — health check
 ```
 
-**Tech stack:** React 18 · TypeScript · Vite · Zustand · Monaco Editor · Express · `react-markdown` · `react-resizable-panels` · `lucide-react`.
+**Tech stack:** React 18 · TypeScript · Vite · Zustand · Monaco Editor · `@monaco-editor/react` · Express · `react-markdown` · `react-syntax-highlighter` · `react-resizable-panels` · `lucide-react`.
 
 ---
 
@@ -116,7 +166,23 @@ server (Express)
 
 - API keys are stored in `localStorage` (browser only) and sent only to the local server, which proxies to the provider.
 - The `/api/exec` endpoint runs commands in the workspace dir — intended for local single-user use.
+- All file operations are sandboxed to the workspace root (path traversal is blocked).
 
 ---
 
-Built as a "better than Cursor" demo. Enjoy. 🟣
+## 📜 Available Scripts
+
+| Script | Description |
+|---|---|
+| `npm run dev` | Start both client + server in dev mode (with hot reload) |
+| `npm run dev:client` | Start only the Vite frontend |
+| `npm run dev:server` | Start only the Express backend (with watch mode) |
+| `npm run build` | Type-check and build the frontend for production |
+| `npm start` | Start the production server (serves built app + API) |
+| `npm run preview` | Preview the built frontend via Vite |
+
+---
+
+## 📄 License
+
+MIT — built as a "better than Cursor" demo. Enjoy. 🟣
