@@ -1,0 +1,330 @@
+import { useEffect, useMemo, useState } from 'react'
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import {
+  Files,
+  Search as SearchIcon,
+  Settings as SettingsIcon,
+  Sparkles,
+  Command,
+  PanelLeft,
+  PanelRight,
+  Terminal as TermIcon,
+  Mic,
+  FlaskConical,
+} from 'lucide-react'
+import { useStore } from './store'
+import FileExplorer from './components/FileExplorer'
+import EditorArea from './components/EditorArea'
+import ChatPanel from './components/ChatPanel'
+import SettingsModal from './components/SettingsModal'
+import CommandPalette from './components/CommandPalette'
+import TerminalPanel from './components/TerminalPanel'
+import VoicePanel from './components/VoicePanel'
+
+export default function App() {
+  const refreshTree = useStore((s) => s.refreshTree)
+  const setPaletteOpen = useStore((s) => s.setPaletteOpen)
+  const setSettingsOpen = useStore((s) => s.setSettingsOpen)
+  const sidebarVisible = useStore((s) => s.sidebarVisible)
+  const chatVisible = useStore((s) => s.chatVisible)
+  const setSidebarVisible = useStore((s) => s.setSidebarVisible)
+  const setChatVisible = useStore((s) => s.setChatVisible)
+  const activeView = useStore((s) => s.activeView)
+  const setActiveView = useStore((s) => s.setActiveView)
+  const tree = useStore((s) => s.tree)
+  const activeTab = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
+  const toasts = useStore((s) => s.toasts)
+  const settings = useStore((s) => s.settings)
+  const terminalOpen = useStore((s) => s.terminalOpen)
+  const setTerminalOpen = useStore((s) => s.setTerminalOpen)
+  const setVoiceOpen = useStore((s) => s.setVoiceOpen)
+  const generateTests = useStore((s) => s.generateTests)
+  const genTestsBusy = useStore((s) => s.genTestsBusy)
+
+  useEffect(() => {
+    refreshTree()
+  }, [refreshTree])
+
+  // global shortcuts
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey
+      if (mod && e.key === 'p') {
+        e.preventDefault()
+        setPaletteOpen(true)
+      } else if (mod && e.key === 'k') {
+        e.preventDefault()
+        setPaletteOpen(true)
+      } else if (mod && e.key === 's') {
+        // monaco handles editor save, but also support top-level
+        // (monaco stops propagation when focused, so this is a fallback)
+      } else if (mod && e.key === ',') {
+        e.preventDefault()
+        setSettingsOpen(true)
+      } else if (mod && e.key === 'b') {
+        e.preventDefault()
+        setSidebarVisible(!sidebarVisible)
+      } else if (mod && e.key === 'j') {
+        e.preventDefault()
+        setChatVisible(!chatVisible)
+      } else if (mod && e.shiftKey && e.key === 'i') {
+        e.preventDefault()
+        setChatVisible(!chatVisible)
+      } else if (e.ctrlKey && e.key === '`') {
+        e.preventDefault()
+        setTerminalOpen(!terminalOpen)
+      } else if (mod && e.shiftKey && e.key === 'v') {
+        e.preventDefault()
+        setVoiceOpen(true)
+      } else if (mod && e.shiftKey && e.key === 't') {
+        e.preventDefault()
+        generateTests()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [
+    setPaletteOpen,
+    setSettingsOpen,
+    sidebarVisible,
+    chatVisible,
+    setSidebarVisible,
+    setChatVisible,
+    terminalOpen,
+    setTerminalOpen,
+    setVoiceOpen,
+    generateTests,
+  ])
+
+  const dirty = activeTab && activeTab.content !== activeTab.savedContent
+
+  return (
+    <div className="app">
+     <div className="app-body">
+      {/* Activity Bar */}
+      <div className="activity-bar">
+        <div className="logo-mark">N</div>
+        <div className="activity-icons">
+          <button
+            className={`activity-btn ${activeView === 'explorer' && sidebarVisible ? 'active' : ''}`}
+            title="Explorer (⌘B)"
+            onClick={() => {
+              if (activeView === 'explorer' && sidebarVisible) setSidebarVisible(false)
+              else {
+                setActiveView('explorer')
+                setSidebarVisible(true)
+              }
+            }}
+          >
+            <Files size={20} />
+          </button>
+          <button
+            className={`activity-btn ${activeView === 'search' ? 'active' : ''}`}
+            title="Search"
+            onClick={() => {
+              setActiveView('search')
+              setSidebarVisible(true)
+            }}
+          >
+            <SearchIcon size={20} />
+          </button>
+          <button
+            className={`activity-btn ${terminalOpen ? 'active' : ''}`}
+            title="Terminal (⌃`)"
+            onClick={() => setTerminalOpen(!terminalOpen)}
+          >
+            <TermIcon size={19} />
+          </button>
+          <button
+            className="activity-btn"
+            title="Voice Coding (⌘⇧V)"
+            onClick={() => setVoiceOpen(true)}
+          >
+            <Mic size={19} />
+          </button>
+        </div>
+        <div style={{ flex: 1 }} />
+        <button
+          className="activity-btn"
+          title="Command Palette (⌘P)"
+          onClick={() => setPaletteOpen(true)}
+        >
+          <Command size={19} />
+        </button>
+        <button
+          className="activity-btn"
+          title="Settings (⌘,)"
+          onClick={() => setSettingsOpen(true)}
+        >
+          <SettingsIcon size={20} />
+        </button>
+      </div>
+
+      {/* Main */}
+      <div className="main-area">
+        <PanelGroup direction="horizontal" className="main">
+          {sidebarVisible && (
+            <>
+              <Panel defaultSize={20} minSize={12} maxSize={40} className="sidebar-panel" order={1}>
+                {activeView === 'explorer' ? (
+                  <FileExplorer />
+                ) : (
+                  <SearchView />
+                )}
+              </Panel>
+              <PanelResizeHandle className="resize-handle" />
+            </>
+          )}
+
+          <Panel minSize={30} order={2}>
+            <div className="editor-and-terminal">
+              <EditorArea />
+              {terminalOpen && <TerminalPanel />}
+            </div>
+          </Panel>
+
+          {chatVisible && (
+            <>
+              <PanelResizeHandle className="resize-handle" />
+              <Panel defaultSize={32} minSize={18} maxSize={55} order={3}>
+                <ChatPanel />
+              </Panel>
+            </>
+          )}
+        </PanelGroup>
+      </div>
+     </div>
+
+      {/* Status Bar */}
+      <div className="status-bar">
+        <div className="status-left">
+          <button
+            className="status-btn"
+            title="Toggle Sidebar"
+            onClick={() => setSidebarVisible(!sidebarVisible)}
+          >
+            <PanelLeft size={13} />
+          </button>
+          {tree && <span className="status-item">{tree.path === '.' ? 'workspace' : tree.path}</span>}
+          {dirty && <span className="status-item" style={{ color: 'var(--yellow)' }}>● unsaved</span>}
+          {activeTab && (
+            <button
+              className="status-btn gen-tests-btn"
+              title="Generate tests (⌘⇧T)"
+              onClick={generateTests}
+              disabled={genTestsBusy}
+            >
+              <FlaskConical size={12} /> {genTestsBusy ? 'Generating…' : 'Gen Tests'}
+            </button>
+          )}
+        </div>
+        <div className="status-center">
+          {activeTab && (
+            <>
+              <span className="status-item">{activeTab.language}</span>
+              <span className="status-item">UTF-8</span>
+              <span className="status-item">LF</span>
+            </>
+          )}
+        </div>
+        <div className="status-right">
+          <span className="status-item provider-badge">
+            <Sparkles size={11} className="spark" />
+            {settings.provider === 'demo' ? 'Demo' : settings.provider}
+            {settings.provider !== 'demo' && (
+              <> · {settings.provider === 'openai' ? settings.openaiModel : settings.provider === 'anthropic' ? settings.anthropicModel : settings.ollamaModel}</>
+            )}
+          </span>
+          <button
+            className="status-btn"
+            title="Toggle Terminal (⌃`)"
+            onClick={() => setTerminalOpen(!terminalOpen)}
+          >
+            <TermIcon size={13} />
+          </button>
+          <button
+            className="status-btn"
+            title="Toggle AI Panel"
+            onClick={() => setChatVisible(!chatVisible)}
+          >
+            <PanelRight size={13} />
+          </button>
+        </div>
+      </div>
+
+      {/* Toasts */}
+      <div className="toast-stack">
+        {toasts.map((t) => (
+          <div key={t.id} className="toast">
+            {t.text}
+          </div>
+        ))}
+      </div>
+
+      {/* Overlays */}
+      <SettingsModal />
+      <CommandPalette />
+      <VoicePanel />
+    </div>
+  )
+}
+
+function SearchView() {
+  const tree = useStore((s) => s.tree)
+  const [q, setQ] = useState('')
+
+  const results = useMemo(() => {
+    if (!q.trim() || !tree) return [] as { path: string; name: string }[]
+    const out: { path: string; name: string }[] = []
+    const walk = (n: any) => {
+      if (n.type === 'file' && n.path.toLowerCase().includes(q.toLowerCase())) {
+        out.push({ path: n.path, name: n.name })
+      }
+      n.children?.forEach(walk)
+    }
+    walk(tree)
+    return out.slice(0, 50)
+  }, [q, tree])
+
+  const openFile = useStore((s) => s.openFile)
+
+  return (
+    <div className="sidebar">
+      <div className="sidebar-header">
+        <span>Search</span>
+      </div>
+      <div style={{ padding: 8 }}>
+        <input
+          className="input"
+          placeholder="Search files by name…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          autoFocus
+        />
+      </div>
+      <div className="file-tree">
+        {q.trim() === '' && (
+          <div style={{ color: 'var(--text-faint)', fontSize: 12.5, padding: 8 }}>
+            Type to search files. Use ⌘P for the command palette.
+          </div>
+        )}
+        {q.trim() !== '' && results.length === 0 && (
+          <div style={{ color: 'var(--text-faint)', fontSize: 12.5, padding: 8 }}>
+            No files found.
+          </div>
+        )}
+        {results.map((r) => (
+          <div
+            key={r.path}
+            className="tree-row"
+            onClick={() => openFile(r.path)}
+            title={r.path}
+          >
+            <span style={{ paddingLeft: 22 }} />
+            <span className="name" style={{ fontSize: 12.5 }}>{r.path}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}

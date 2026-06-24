@@ -1,0 +1,12 @@
+{
+  "name": "betterthancursor",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "echo \"no tests\" && exit 0"
+  },
+  "license": "MIT"
+}
