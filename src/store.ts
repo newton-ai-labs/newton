@@ -51,7 +51,7 @@ interface NewtonState {
   paletteOpen: boolean
   sidebarVisible: boolean
   chatVisible: boolean
-  activeView: 'explorer' | 'search' | 'scm' | 'graph' | 'memory' | 'mission'
+  activeView: 'explorer' | 'search' | 'scm' | 'graph' | 'memory' | 'mission' | 'problems'
   settings: Settings
   toasts: Toast[]
 
@@ -122,7 +122,7 @@ interface NewtonState {
   setPaletteOpen: (v: boolean) => void
   setSidebarVisible: (v: boolean) => void
   setChatVisible: (v: boolean) => void
-  setActiveView: (v: 'explorer' | 'search' | 'scm' | 'graph' | 'memory' | 'mission') => void
+  setActiveView: (v: 'explorer' | 'search' | 'scm' | 'graph' | 'memory' | 'mission' | 'problems') => void
   toast: (text: string) => void
 
   // git / source control

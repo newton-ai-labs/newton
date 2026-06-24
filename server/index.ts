@@ -997,6 +997,227 @@ ${testCases}
 `
 }
 
+// ---------- diagnostics (TypeScript / lint problems) ----------
+interface Diagnostic {
+  filePath: string
+  line: number
+  column: number
+  severity: 'error' | 'warning'
+  message: string
+  code?: string
+  source: string
+}
+
+interface DiagnosticsResult {
+  diagnostics: Diagnostic[]
+  errorCount: number
+  warningCount: number
+  available: boolean
+}
+
+// Cache the last diagnostics result so repeated calls are fast
+let lastDiag: DiagnosticsResult | null = null
+let diagBusy = false
+
+app.get('/api/diagnostics', async (_req, res) => {
+  try {
+    // Return cached result if available (or if a check is in-flight)
+    if (lastDiag) {
+      res.json(lastDiag)
+      return
+    }
+    if (diagBusy) {
+      res.json({ diagnostics: [], errorCount: 0, warningCount: 0, available: false })
+      return
+    }
+    diagBusy = true
+
+    const result = await runDiagnostics()
+    lastDiag = result
+    diagBusy = false
+    res.json(result)
+  } catch (e) {
+    diagBusy = false
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.post('/api/diagnostics/refresh', async (_req, res) => {
+  try {
+    // Force a fresh check
+    lastDiag = null
+    if (diagBusy) {
+      res.json({ diagnostics: [], errorCount: 0, warningCount: 0, available: false })
+      return
+    }
+    diagBusy = true
+    const result = await runDiagnostics()
+    lastDiag = result
+    diagBusy = false
+    res.json(result)
+  } catch (e) {
+    diagBusy = false
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+async function runDiagnostics(): Promise<DiagnosticsResult> {
+  const diagnostics: Diagnostic[] = []
+
+  // Check for TypeScript project
+  const tsconfigExists = existsSync(path.join(WORKSPACE, 'tsconfig.json'))
+  const hasTypeScript = tsconfigExists ||
+    (await fs.readdir(WORKSPACE).catch(() => [])).some((f) => f.endsWith('.ts') || f.endsWith('.tsx'))
+
+  // Try TypeScript diagnostics
+  if (hasTypeScript) {
+    try {
+      const tscResult = await runCommand(
+        'npx tsc --noEmit --pretty false 2>&1',
+        { cwd: WORKSPACE, timeout: 45000 },
+      )
+      const lines = tscResult.split('\n').filter((l) => l.trim() && l.includes('('))
+      for (const line of lines) {
+        const diag = parseTscLine(line)
+        if (diag) diagnostics.push(diag)
+      }
+    } catch {
+      // tsc not available — try checking for common issues heuristically
+    }
+  }
+
+  // Run ESLint if available
+  try {
+    const hasEslint = existsSync(path.join(WORKSPACE, '.eslintrc.js')) ||
+      existsSync(path.join(WORKSPACE, '.eslintrc.json')) ||
+      existsSync(path.join(WORKSPACE, '.eslintrc.cjs')) ||
+      existsSync(path.join(WORKSPACE, 'eslint.config.js')) ||
+      existsSync(path.join(WORKSPACE, 'eslint.config.mjs'))
+
+    if (hasEslint) {
+      const eslintResult = await runCommand(
+        'npx eslint --format json . 2>/dev/null',
+        { cwd: WORKSPACE, timeout: 30000 },
+      )
+      try {
+        const eslintData = JSON.parse(eslintResult) as Array<{
+          filePath: string
+          messages: Array<{
+            line: number
+            column: number
+            severity: number
+            message: string
+            ruleId?: string
+          }>
+        }>
+        for (const file of eslintData) {
+          const relPath = path.relative(WORKSPACE, file.filePath)
+          for (const msg of file.messages) {
+            diagnostics.push({
+              filePath: relPath,
+              line: msg.line,
+              column: msg.column,
+              severity: msg.severity === 2 ? 'error' : 'warning',
+              message: msg.message,
+              code: msg.ruleId,
+              source: 'eslint',
+            })
+          }
+        }
+      } catch {
+        // JSON parse failed — ignore
+      }
+    }
+  } catch {
+    // ESLint not available
+  }
+
+  // If no linters available, run heuristic checks for common issues
+  if (diagnostics.length === 0) {
+    const heuristic = await runHeuristicDiagnostics()
+    diagnostics.push(...heuristic)
+  }
+
+  const errorCount = diagnostics.filter((d) => d.severity === 'error').length
+  const warningCount = diagnostics.filter((d) => d.severity === 'warning').length
+  const available = hasTypeScript || diagnostics.length > 0
+
+  return { diagnostics, errorCount, warningCount, available }
+}
+
+/** Parse a single tsc output line into a Diagnostic. */
+function parseTscLine(line: string): Diagnostic | null {
+  // Format: path/to/file.ts(line,col): error TS1234: message
+  const match = line.match(/^(.+?)\((\d+),(\d+)\):\s*(error|warning)\s*(TS\d+):\s*(.+)$/)
+  if (!match) return null
+  return {
+    filePath: match[1],
+    line: parseInt(match[2], 10),
+    column: parseInt(match[3], 10),
+    severity: match[4] === 'error' ? 'error' : 'warning',
+    message: match[6],
+    code: match[5],
+    source: 'tsc',
+  }
+}
+
+/** Run a shell command and return stdout+stderr combined. */
+function runCommand(command: string, opts: { cwd: string; timeout: number }): Promise<string> {
+  return new Promise((resolve, reject) => {
+    import('node:child_process').then(({ exec }) => {
+      exec(command, opts, (err, stdout, stderr) => {
+        // tsc exits with code 1 on errors — that's expected, not a real failure
+        const combined = stdout.toString() + stderr.toString()
+        resolve(combined)
+      })
+    }).catch(reject)
+  })
+}
+
+/** Heuristic checks for common code issues (TODO/FIXME, console.log in production files). */
+async function runHeuristicDiagnostics(): Promise<Diagnostic[]> {
+  const diagnostics: Diagnostic[] = []
+  const codeExts = new Set(['ts', 'tsx', 'js', 'jsx', 'py', 'go', 'rs', 'java', 'c', 'cpp', 'rb', 'php', 'swift', 'kt'])
+
+  async function checkDir(absDir: string, relDir: string) {
+    const entries = await fs.readdir(absDir, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      if (IGNORED.has(entry.name)) continue
+      const childRel = relDir ? `${relDir}/${entry.name}` : entry.name
+      const childAbs = path.join(absDir, entry.name)
+      if (entry.isDirectory()) {
+        await checkDir(childAbs, childRel)
+      } else if (entry.isFile() && codeExts.has(entry.name.split('.').pop()?.toLowerCase() ?? '')) {
+        try {
+          const content = await fs.readFile(childAbs, 'utf8')
+          const lines = content.split('\n')
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i]
+            // TODO / FIXME / HACK
+            if (/\b(TODO|FIXME|HACK|XXX)\b/.test(line)) {
+              diagnostics.push({
+                filePath: childRel,
+                line: i + 1,
+                column: (line.search(/\b(TODO|FIXME|HACK|XXX)\b/) ?? 0) + 1,
+                severity: 'warning',
+                message: line.trim().match(/(?:TODO|FIXME|HACK|XXX)[:\s]?.*/)?.[0] ?? 'Task marker',
+                code: line.match(/\b(TODO|FIXME|HACK|XXX)\b/)?.[0],
+                source: 'heuristic',
+              })
+            }
+          }
+        } catch {
+          /* skip */
+        }
+      }
+    }
+  }
+
+  await checkDir(WORKSPACE, '')
+  // Limit heuristic results to avoid overwhelming
+  return diagnostics.slice(0, 200)
+}
+
 // ---------- Git / source control ----------
 interface GitFileChange {
   path: string

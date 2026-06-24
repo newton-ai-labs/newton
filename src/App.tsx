@@ -16,6 +16,7 @@ import {
   Brain,
   Rocket,
   X,
+  AlertCircle,
 } from 'lucide-react'
 import { useStore } from './store'
 import FileExplorer from './components/FileExplorer'
@@ -30,6 +31,7 @@ import GraphPanel from './components/GraphPanel'
 import MemoryPanel from './components/MemoryPanel'
 import MissionPanel from './components/MissionPanel'
 import SearchPanel from './components/SearchPanel'
+import { ProblemsPanel } from './components/ProblemsPanel'
 import Composer from './components/Composer'
 
 export default function App() {
@@ -183,6 +185,19 @@ export default function App() {
             )}
           </button>
           <button
+            className={`activity-btn ${activeView === 'problems' ? 'active' : ''}`}
+            title="Problems & Diagnostics"
+            onClick={() => {
+              if (activeView === 'problems' && sidebarVisible) setSidebarVisible(false)
+              else {
+                setActiveView('problems')
+                setSidebarVisible(true)
+              }
+            }}
+          >
+            <AlertCircle size={20} />
+          </button>
+          <button
             className={`activity-btn ${activeView === 'memory' ? 'active' : ''}`}
             title="Workspace Memory"
             onClick={() => {
@@ -285,6 +300,21 @@ export default function App() {
                   <MissionPanel />
                 ) : activeView === 'search' ? (
                   <SearchPanel />
+                ) : activeView === 'problems' ? (
+                  <ProblemsPanel
+                    onOpenFile={(p: string, line?: number) => {
+                      // Open the file at the diagnostic location
+                      useStore.getState().openFile(p).then(() => {
+                        if (line) {
+                          // Reveal the line in the editor after a short delay
+                          setTimeout(() => {
+                            const event = new CustomEvent('newton:goto-line', { detail: { line, column: 1 } })
+                            window.dispatchEvent(event)
+                          }, 200)
+                        }
+                      })
+                    }}
+                  />
                 ) : (
                   <FileExplorer />
                 )}
