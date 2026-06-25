@@ -35,7 +35,7 @@ describe('migrateSettings', () => {
     const result = migrateSettings(settings)
     expect(result.provider).toBe('openai')
     expect(result.fontSize).toBe(16)
-    expect(result.providerConfigs.openai.model).toBe('gpt-4')
+    expect(result.providerConfigs.openai?.model).toBe('gpt-4')
   })
 
   it('migrates legacy openai settings', () => {
@@ -46,8 +46,8 @@ describe('migrateSettings', () => {
     }
     const result = migrateSettings(legacy)
     expect(result.provider).toBe('openai')
-    expect(result.providerConfigs.openai.model).toBe('gpt-3.5-turbo')
-    expect(result.providerConfigs.openai.apiKey).toBe('sk-legacy')
+    expect(result.providerConfigs.openai?.model).toBe('gpt-3.5-turbo')
+    expect(result.providerConfigs.openai?.apiKey).toBe('sk-legacy')
   })
 
   it('migrates legacy anthropic settings', () => {
@@ -58,8 +58,8 @@ describe('migrateSettings', () => {
     }
     const result = migrateSettings(legacy)
     expect(result.provider).toBe('anthropic')
-    expect(result.providerConfigs.anthropic.model).toBe('claude-2')
-    expect(result.providerConfigs.anthropic.apiKey).toBe('sk-ant-legacy')
+    expect(result.providerConfigs.anthropic?.model).toBe('claude-2')
+    expect(result.providerConfigs.anthropic?.apiKey).toBe('sk-ant-legacy')
   })
 
   it('migrates legacy ollama settings', () => {
@@ -70,8 +70,8 @@ describe('migrateSettings', () => {
     }
     const result = migrateSettings(legacy)
     expect(result.provider).toBe('ollama')
-    expect(result.providerConfigs.ollama.model).toBe('mistral')
-    expect(result.providerConfigs.ollama.baseUrl).toBe('http://localhost:11434')
+    expect(result.providerConfigs.ollama?.model).toBe('mistral')
+    expect(result.providerConfigs.ollama?.baseUrl).toBe('http://localhost:11434')
   })
 })
 
