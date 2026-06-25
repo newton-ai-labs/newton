@@ -122,7 +122,9 @@ export default function SettingsModal() {
                 value={activeCfg?.apiKey ?? ''}
                 onChange={(e) => setProviderField('apiKey', e.target.value)}
               />
-              <p className="hint">Stored locally in your browser. Never sent anywhere except {activeDef.name}.</p>
+              <p className="hint">
+                <strong>Local storage only.</strong> Your key is stored in this browser's localStorage and sent directly to {activeDef.name}. It never touches Newton's servers.
+              </p>
             </section>
           )}
 

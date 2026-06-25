@@ -25,6 +25,8 @@ export default defineConfig(() => {
       },
     },
     build: {
+      // Monaco editor is inherently large (~800KB); suppress warning for local desktop app
+      chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
           manualChunks: {
