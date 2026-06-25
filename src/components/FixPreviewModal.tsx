@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useStore } from '../store'
-import { Check, X, Sparkles, FileCode } from 'lucide-react'
+import { Check, X, Sparkles, FileCode, Info } from 'lucide-react'
 
 /**
  * Modal that shows a diff preview of an AI auto-fix.
@@ -24,6 +24,7 @@ export default function FixPreviewModal() {
 
   const addedCount = diff.filter((d) => d.type === 'added').length
   const removedCount = diff.filter((d) => d.type === 'removed').length
+  const noChanges = !!preview.noChanges || (addedCount === 0 && removedCount === 0)
 
   const handleApply = async () => {
     setApplying(true)
@@ -40,7 +41,7 @@ export default function FixPreviewModal() {
         <div className="modal-header">
           <div className="modal-title">
             <Sparkles size={16} className="spark" style={{ color: 'var(--blue)' }} />
-            <span>AI Fix Preview</span>
+            <span>{noChanges ? 'No Automatic Fix Available' : 'AI Fix Preview'}</span>
             <span className="fix-preview-file">
               <FileCode size={13} />
               {preview.filePath}
@@ -53,30 +54,41 @@ export default function FixPreviewModal() {
 
         <div className="fix-explanation">{preview.explanation}</div>
 
-        <div className="fix-diff-stats">
-          <span className="diff-stat added">+{addedCount}</span>
-          <span className="diff-stat removed">-{removedCount}</span>
-        </div>
-
-        <div className="fix-diff-container">
-          {diff.map((line, idx) => (
-            <div key={idx} className={`diff-line diff-${line.type}`}>
-              <span className="diff-gutter">
-                {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
-              </span>
-              <span className="diff-content">{line.text || ' '}</span>
+        {noChanges ? (
+          <div className="fix-noop">
+            <Info size={18} />
+            <span>This diagnostic needs manual review or a more capable provider. No file changes will be applied.</span>
+          </div>
+        ) : (
+          <>
+            <div className="fix-diff-stats">
+              <span className="diff-stat added">+{addedCount}</span>
+              <span className="diff-stat removed">-{removedCount}</span>
             </div>
-          ))}
-        </div>
+
+            <div className="fix-diff-container">
+              {diff.map((line, idx) => (
+                <div key={idx} className={`diff-line diff-${line.type}`}>
+                  <span className="diff-gutter">
+                    {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
+                  </span>
+                  <span className="diff-content">{line.text || ' '}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
 
         <div className="modal-footer">
           <button className="btn-secondary" onClick={dismissFix} disabled={applying || fixBusy}>
-            Cancel
+            {noChanges ? 'Close' : 'Cancel'}
           </button>
-          <button className="btn-primary" onClick={handleApply} disabled={applying || fixBusy}>
-            <Check size={14} />
-            {applying ? 'Applying…' : 'Apply Fix'}
-          </button>
+          {!noChanges && (
+            <button className="btn-primary" onClick={handleApply} disabled={applying || fixBusy}>
+              <Check size={14} />
+              {applying ? 'Applying…' : 'Apply Fix'}
+            </button>
+          )}
         </div>
       </div>
     </div>

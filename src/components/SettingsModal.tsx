@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import * as LucideIcons from 'lucide-react'
+import { X, Check, KeyRound, Cpu, Zap, Shield, Share2, Sparkles, type LucideIcon } from 'lucide-react'
 import { useStore } from '../store'
 import {
   PROVIDER_REGISTRY,
@@ -7,6 +7,15 @@ import {
   type Settings as SettingsType,
   type PerProviderSettings,
 } from '../../shared/types'
+
+// Map of icon names used in PROVIDER_REGISTRY to components
+const PROVIDER_ICONS: Record<string, LucideIcon> = {
+  Cpu,
+  Zap,
+  Shield,
+  Share2,
+  Sparkles,
+}
 
 export default function SettingsModal() {
   const open = useStore((s) => s.settingsOpen)
@@ -51,7 +60,7 @@ export default function SettingsModal() {
         <div className="modal-header">
           <h2>Settings</h2>
           <button className="mini-btn" onClick={() => setOpen(false)}>
-            <LucideIcons.X size={16} />
+            <X size={16} />
           </button>
         </div>
 
@@ -62,8 +71,7 @@ export default function SettingsModal() {
             <p className="section-desc">Choose how Newton's assistant is powered.</p>
             <div className="provider-grid">
               {PROVIDER_REGISTRY.map((p) => {
-                // @ts-expect-error — dynamic icon lookup from registry string
-                const Icon = LucideIcons[p.icon] ?? LucideIcons.Cpu
+                const Icon = PROVIDER_ICONS[p.icon] ?? Cpu
                 const active = settings.provider === p.id
                 return (
                   <div
@@ -91,7 +99,7 @@ export default function SettingsModal() {
                     </div>
                     {active && (
                       <div className="provider-check">
-                        <LucideIcons.Check size={14} />
+                        <Check size={14} />
                       </div>
                     )}
                   </div>
@@ -104,7 +112,7 @@ export default function SettingsModal() {
           {activeDef.needsKey && (
             <section>
               <h3>
-                <LucideIcons.KeyRound size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+                <KeyRound size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />
                 {activeDef.name} API Key
               </h3>
               <input
@@ -189,7 +197,7 @@ export default function SettingsModal() {
         <div className="modal-footer">
           {saved && (
             <span style={{ color: 'var(--green)', fontSize: 13, marginRight: 'auto' }}>
-              <LucideIcons.Check size={12} style={{ verticalAlign: '-1px' }} /> Saved
+              <Check size={12} style={{ verticalAlign: '-1px' }} /> Saved
             </span>
           )}
           <button className="btn-primary" onClick={() => { setOpen(false); toast('Settings saved') }}>

@@ -188,6 +188,15 @@ select {
 .sidebar-panel {
   min-width: 0;
 }
+
+.panel-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-dim);
+  font-size: 12px;
+}
 .sidebar {
   background: var(--panel);
   display: flex;
@@ -1471,6 +1480,25 @@ select.input {
 }
 .diff-stat.added { color: var(--green); }
 .diff-stat.removed { color: var(--red); }
+.fix-noop {
+  flex: 1;
+  min-height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--text-dim);
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+.fix-noop svg {
+  color: var(--blue);
+  flex-shrink: 0;
+}
 .fix-diff-container {
   flex: 1;
   overflow: auto;

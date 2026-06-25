@@ -1349,7 +1349,7 @@ function runCommand(command: string, opts: { cwd: string; timeout: number }): Pr
   })
 }
 
-/** Heuristic checks for common code issues (TODO/FIXME, console.log in production files). */
+/** Heuristic checks for common code issues when no compiler/linter diagnostics are available. */
 async function runHeuristicDiagnostics(): Promise<Diagnostic[]> {
   const diagnostics: Diagnostic[] = []
   const codeExts = new Set(['ts', 'tsx', 'js', 'jsx', 'py', 'go', 'rs', 'java', 'c', 'cpp', 'rb', 'php', 'swift', 'kt'])
@@ -1364,19 +1364,34 @@ async function runHeuristicDiagnostics(): Promise<Diagnostic[]> {
         await checkDir(childAbs, childRel)
       } else if (entry.isFile() && codeExts.has(entry.name.split('.').pop()?.toLowerCase() ?? '')) {
         try {
+          const ext = entry.name.split('.').pop()?.toLowerCase() ?? ''
           const content = await fs.readFile(childAbs, 'utf8')
           const lines = content.split('\n')
           for (let i = 0; i < lines.length; i++) {
             const line = lines[i]
-            // TODO / FIXME / HACK
-            if (/\b(TODO|FIXME|HACK|XXX)\b/.test(line)) {
+            const marker = extractTaskMarker(line, ext)
+            if (marker) {
               diagnostics.push({
                 filePath: childRel,
                 line: i + 1,
-                column: (line.search(/\b(TODO|FIXME|HACK|XXX)\b/) ?? 0) + 1,
+                column: marker.column,
                 severity: 'warning',
-                message: line.trim().match(/(?:TODO|FIXME|HACK|XXX)[:\s]?.*/)?.[0] ?? 'Task marker',
-                code: line.match(/\b(TODO|FIXME|HACK|XXX)\b/)?.[0],
+                message: marker.message,
+                code: marker.code,
+                source: 'heuristic',
+              })
+              continue
+            }
+
+            const trailing = line.match(/[ \t]+$/)
+            if (trailing) {
+              diagnostics.push({
+                filePath: childRel,
+                line: i + 1,
+                column: line.length - trailing[0].length + 1,
+                severity: 'warning',
+                message: 'Trailing whitespace',
+                code: 'no-trailing-spaces',
                 source: 'heuristic',
               })
             }
@@ -1391,6 +1406,84 @@ async function runHeuristicDiagnostics(): Promise<Diagnostic[]> {
   await checkDir(WORKSPACE, '')
   // Limit heuristic results to avoid overwhelming
   return diagnostics.slice(0, 200)
+}
+
+function extractTaskMarker(
+  line: string,
+  ext: string,
+): { column: number; message: string; code: string } | null {
+  const comment = findCommentText(line, ext)
+  if (!comment) return null
+
+  const match = comment.text.match(/\b(TODO|FIXME|HACK|XXX)\b(?::|\s+-|\s+|$)(.*)$/i)
+  if (!match || match.index === undefined) return null
+
+  const raw = comment.text.slice(match.index).trim()
+  const normalized = raw.replace(/\s+/g, ' ')
+
+  // Ignore comments that describe marker syntax rather than an actionable task.
+  if (/^(TODO|FIXME|HACK|XXX)(\s*[\/|,]\s*(TODO|FIXME|HACK|XXX))*\s*$/i.test(normalized)) {
+    return null
+  }
+  if (/^(TODO|FIXME|HACK|XXX)\b\s*(marker|markers|diagnostic|diagnostics|rule|rules)\b/i.test(normalized)) {
+    return null
+  }
+
+  return {
+    column: comment.column + match.index,
+    message: normalized || 'Task marker',
+    code: match[1].toUpperCase(),
+  }
+}
+
+function findCommentText(line: string, ext: string): { column: number; text: string } | null {
+  const trimmedStart = line.trimStart()
+  const leadingWhitespace = line.length - trimmedStart.length
+
+  if (trimmedStart.startsWith('*')) {
+    return { column: leadingWhitespace + 2, text: trimmedStart.slice(1).trimStart() }
+  }
+
+  const tokens = ['//', '/*']
+  if (['py', 'rb'].includes(ext)) tokens.push('#')
+  if (ext === 'sql') tokens.push('--')
+
+  const found = findFirstCommentToken(line, tokens)
+  if (!found) return null
+
+  return {
+    column: found.index + found.token.length + 1,
+    text: line.slice(found.index + found.token.length).trimStart(),
+  }
+}
+
+function findFirstCommentToken(line: string, tokens: string[]): { index: number; token: string } | null {
+  let quote: '"' | "'" | '`' | null = null
+  let escaped = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+
+    if (quote) {
+      if (escaped) {
+        escaped = false
+      } else if (ch === '\\') {
+        escaped = true
+      } else if (ch === quote) {
+        quote = null
+      }
+      continue
+    }
+
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch
+      continue
+    }
+
+    for (const token of tokens) {
+      if (line.startsWith(token, i)) return { index: i, token }
+    }
+  }
+  return null
 }
 
 // ---------- AI auto-fix for diagnostics ----------
@@ -1443,25 +1536,44 @@ app.post('/api/diagnostics/fix', async (req, res) => {
 
     let fixed = await llmComplete(p, sys, user)
     fixed = fixed.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim()
+    const changed = fixed !== content
 
     res.json({
       fixedContent: fixed,
-      explanation: `Fixed ${diagnostic.code ?? diagnostic.source} issue: ${diagnostic.message}`,
+      explanation: changed
+        ? `Fixed ${diagnostic.code ?? diagnostic.source} issue: ${diagnostic.message}`
+        : 'No automatic fix is available for this diagnostic.',
+      changed,
+      kind: changed ? 'code-change' : 'unavailable',
     })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }
 })
 
+type DiagnosticFixKind = 'code-change' | 'manual-review' | 'unavailable'
+
+interface DiagnosticFixResponse {
+  fixedContent: string
+  explanation: string
+  changed: boolean
+  kind: DiagnosticFixKind
+}
+
 /** Demo heuristic fixes for common diagnostic issues. */
 function demoFix(
   diagnostic: { filePath: string; line: number; message: string; code?: string; source: string },
   content: string,
-): { fixedContent: string; explanation: string } {
+): DiagnosticFixResponse {
   const lines = content.split('\n')
   const lineIdx = diagnostic.line - 1
   if (lineIdx < 0 || lineIdx >= lines.length) {
-    return { fixedContent: content, explanation: 'Could not locate the problematic line.' }
+    return {
+      fixedContent: content,
+      explanation: 'Could not locate the problematic line.',
+      changed: false,
+      kind: 'unavailable',
+    }
   }
   const line = lines[lineIdx]
   const msg = diagnostic.message.toLowerCase()
@@ -1471,16 +1583,20 @@ function demoFix(
     const m = line.match(/(const|let|var)\s+(\w+)/)
     if (m) {
       lines[lineIdx] = line.replace(`${m[1]} ${m[2]}`, `${m[1]} _${m[2]}`)
-      return { fixedContent: lines.join('\n'), explanation: `Renamed unused variable to _${m[2]}` }
+      return codeChange(lines.join('\n'), `Renamed unused variable to _${m[2]}`)
     }
   }
 
-  // Fix: cannot find name 'X' → add a placeholder import/comment
+  // Undefined names need user intent; do not create placeholder code.
   if (msg.includes('cannot find name')) {
     const m = line.match(/'(\w+)'/)
     if (m) {
-      lines[lineIdx] = `// TODO: define or import '${m[1]}'\n${line}`
-      return { fixedContent: lines.join('\n'), explanation: `Added TODO comment for undefined '${m[1]}'` }
+      return {
+        fixedContent: content,
+        explanation: `No automatic fix is available for undefined '${m[1]}'. Define or import it manually.`,
+        changed: false,
+        kind: 'manual-review',
+      }
     }
   }
 
@@ -1488,7 +1604,7 @@ function demoFix(
   if (msg.includes('missing semicolon') || diagnostic.code === 'semi') {
     if (!line.trimEnd().endsWith(';') && !line.trim().endsWith('{') && !line.trim().endsWith('}')) {
       lines[lineIdx] = line.replace(/(\s*)$/, ';$1')
-      return { fixedContent: lines.join('\n'), explanation: 'Added missing semicolon' }
+      return codeChange(lines.join('\n'), 'Added missing semicolon')
     }
   }
 
@@ -1497,31 +1613,42 @@ function demoFix(
     const trimmed = line.trimEnd()
     if (!trimmed.endsWith(',')) {
       lines[lineIdx] = line.replace(/(\s*)$/, ',$1')
-      return { fixedContent: lines.join('\n'), explanation: 'Added missing comma' }
+      return codeChange(lines.join('\n'), 'Added missing comma')
     }
   }
 
   // Fix: replace single quotes with double (quotes rule)
   if (diagnostic.code === 'quotes' || msg.includes('use double quotes')) {
     lines[lineIdx] = line.replace(/'([^']*)'/g, '"$1"')
-    return { fixedContent: lines.join('\n'), explanation: 'Converted single quotes to double quotes' }
+    return codeChange(lines.join('\n'), 'Converted single quotes to double quotes')
   }
 
   // Fix: trailing whitespace
   if (msg.includes('trailing whitespace') || diagnostic.code === 'no-trailing-spaces') {
     lines[lineIdx] = line.replace(/\s+$/, '')
-    return { fixedContent: lines.join('\n'), explanation: 'Removed trailing whitespace' }
+    return codeChange(lines.join('\n'), 'Removed trailing whitespace')
   }
 
-  // Fix: TODO/FIXME — can't auto-fix, but acknowledge
-  if (diagnostic.source === 'heuristic' && /\b(TODO|FIXME|HACK)\b/.test(msg)) {
-    lines[lineIdx] = `${line}  // ← flagged for review`
-    return { fixedContent: lines.join('\n'), explanation: 'Flagged task marker for review (manual resolution needed)' }
+  // Fix: task markers cannot be resolved automatically, so acknowledge them.
+  if (diagnostic.source === 'heuristic' && /\b(TODO|FIXME|HACK|XXX)\b/i.test(msg)) {
+    return {
+      fixedContent: content,
+      explanation: 'This task marker needs manual review. No code change was generated.',
+      changed: false,
+      kind: 'manual-review',
+    }
   }
 
-  // Fallback: add a comment noting the issue
-  lines[lineIdx] = `${line}  // FIXME: ${diagnostic.message}`
-  return { fixedContent: lines.join('\n'), explanation: `Added comment noting: ${diagnostic.message}` }
+  return {
+    fixedContent: content,
+    explanation: 'No automatic fix is available for this diagnostic.',
+    changed: false,
+    kind: 'unavailable',
+  }
+}
+
+function codeChange(fixedContent: string, explanation: string): DiagnosticFixResponse {
+  return { fixedContent, explanation, changed: true, kind: 'code-change' }
 }
 
 // ---------- Git / source control ----------

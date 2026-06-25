@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import {
   Files,
@@ -19,21 +19,25 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { useStore } from './store'
+
+// Core components loaded immediately
 import FileExplorer from './components/FileExplorer'
 import EditorArea from './components/EditorArea'
 import ChatPanel from './components/ChatPanel'
-import SettingsModal from './components/SettingsModal'
 import CommandPalette from './components/CommandPalette'
-import TerminalPanel from './components/TerminalPanel'
-import VoicePanel from './components/VoicePanel'
-import SourceControlPanel from './components/SourceControlPanel'
-import GraphPanel from './components/GraphPanel'
-import MemoryPanel from './components/MemoryPanel'
-import MissionPanel from './components/MissionPanel'
-import SearchPanel from './components/SearchPanel'
-import { ProblemsPanel } from './components/ProblemsPanel'
-import Composer from './components/Composer'
-import FixPreviewModal from './components/FixPreviewModal'
+
+// Lazy-loaded components for code splitting
+const SettingsModal = lazy(() => import('./components/SettingsModal'))
+const TerminalPanel = lazy(() => import('./components/TerminalPanel'))
+const VoicePanel = lazy(() => import('./components/VoicePanel'))
+const SourceControlPanel = lazy(() => import('./components/SourceControlPanel'))
+const GraphPanel = lazy(() => import('./components/GraphPanel'))
+const MemoryPanel = lazy(() => import('./components/MemoryPanel'))
+const MissionPanel = lazy(() => import('./components/MissionPanel'))
+const SearchPanel = lazy(() => import('./components/SearchPanel'))
+const ProblemsPanel = lazy(() => import('./components/ProblemsPanel').then(m => ({ default: m.ProblemsPanel })))
+const Composer = lazy(() => import('./components/Composer'))
+const FixPreviewModal = lazy(() => import('./components/FixPreviewModal'))
 
 export default function App() {
   const refreshTree = useStore((s) => s.refreshTree)
@@ -74,9 +78,6 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey
       if (mod && e.key === 'p') {
-        e.preventDefault()
-        setPaletteOpen(true)
-      } else if (mod && e.key === 'k') {
         e.preventDefault()
         setPaletteOpen(true)
       } else if (mod && e.key === 's') {
@@ -289,36 +290,38 @@ export default function App() {
           {sidebarVisible && (
             <>
               <Panel defaultSize={20} minSize={12} maxSize={40} className="sidebar-panel" order={1}>
-                {activeView === 'explorer' ? (
-                  <FileExplorer />
-                ) : activeView === 'scm' ? (
-                  <SourceControlPanel />
-                ) : activeView === 'graph' ? (
-                  <GraphPanel />
-                ) : activeView === 'memory' ? (
-                  <MemoryPanel />
-                ) : activeView === 'mission' ? (
-                  <MissionPanel />
-                ) : activeView === 'search' ? (
-                  <SearchPanel />
-                ) : activeView === 'problems' ? (
-                  <ProblemsPanel
-                    onOpenFile={(p: string, line?: number) => {
-                      // Open the file at the diagnostic location
-                      useStore.getState().openFile(p).then(() => {
-                        if (line) {
-                          // Reveal the line in the editor after a short delay
-                          setTimeout(() => {
-                            const event = new CustomEvent('newton:goto-line', { detail: { line, column: 1 } })
-                            window.dispatchEvent(event)
-                          }, 200)
-                        }
-                      })
-                    }}
-                  />
-                ) : (
-                  <FileExplorer />
-                )}
+                <Suspense fallback={<div className="panel-loading">Loading...</div>}>
+                  {activeView === 'explorer' ? (
+                    <FileExplorer />
+                  ) : activeView === 'scm' ? (
+                    <SourceControlPanel />
+                  ) : activeView === 'graph' ? (
+                    <GraphPanel />
+                  ) : activeView === 'memory' ? (
+                    <MemoryPanel />
+                  ) : activeView === 'mission' ? (
+                    <MissionPanel />
+                  ) : activeView === 'search' ? (
+                    <SearchPanel />
+                  ) : activeView === 'problems' ? (
+                    <ProblemsPanel
+                      onOpenFile={(p: string, line?: number) => {
+                        // Open the file at the diagnostic location
+                        useStore.getState().openFile(p).then(() => {
+                          if (line) {
+                            // Reveal the line in the editor after a short delay
+                            setTimeout(() => {
+                              const event = new CustomEvent('newton:goto-line', { detail: { line, column: 1 } })
+                              window.dispatchEvent(event)
+                            }, 200)
+                          }
+                        })
+                      }}
+                    />
+                  ) : (
+                    <FileExplorer />
+                  )}
+                </Suspense>
               </Panel>
               <PanelResizeHandle className="resize-handle" />
             </>
@@ -327,7 +330,11 @@ export default function App() {
           <Panel minSize={30} order={2}>
             <div className="editor-and-terminal">
               <EditorArea />
-              {terminalOpen && <TerminalPanel />}
+              {terminalOpen && (
+                <Suspense fallback={<div className="panel-loading">Loading terminal...</div>}>
+                  <TerminalPanel />
+                </Suspense>
+              )}
             </div>
           </Panel>
 
@@ -410,12 +417,13 @@ export default function App() {
       </div>
 
       {/* Overlays */}
-      <SettingsModal />
+      <Suspense fallback={null}>
+        <SettingsModal />
+        <VoicePanel />
+        <Composer />
+        <FixPreviewModal />
+      </Suspense>
       <CommandPalette />
-      <VoicePanel />
-      <Composer />
-      <FixPreviewModal />
     </div>
   )
 }
-

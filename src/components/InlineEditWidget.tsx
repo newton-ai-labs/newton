@@ -77,6 +77,26 @@ export default function InlineEditWidget({ editor, monaco, tabId, language, file
     setTimeout(() => inputRef.current?.focus(), 30)
   }
 
+  // Monaco owns this shortcut when editor focus is perfect; this fallback covers
+  // browser focus edge cases while staying scoped to the active editor DOM.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod || e.key.toLowerCase() !== 'k' || open) return
+
+      const dom = editor.getDomNode()
+      const active = document.activeElement
+      if (!dom || !active || !dom.contains(active)) return
+
+      e.preventDefault()
+      e.stopPropagation()
+      openWidget()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, open])
+
   function close() {
     setOpen(false)
     setPending(null)

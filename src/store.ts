@@ -125,6 +125,9 @@ interface NewtonState {
     originalContent: string
     fixedContent: string
     explanation: string
+    changed?: boolean
+    kind?: 'code-change' | 'manual-review' | 'unavailable'
+    noChanges?: boolean
   } | null
   fixBusy: boolean
   /** Request an AI fix for a diagnostic. Reads file content, calls backend, opens preview. */
@@ -752,13 +755,21 @@ export const useStore = create<NewtonState>((set, get) => ({
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const data = await r.json()
+      const fixedContent = data.fixedContent ?? content
+      const changed = typeof data.changed === 'boolean' ? data.changed : fixedContent !== content
 
       set({
         fixPreview: {
           filePath: diagnostic.filePath,
           originalContent: content,
-          fixedContent: data.fixedContent ?? content,
-          explanation: data.explanation ?? 'Fix applied.',
+          fixedContent,
+          explanation:
+            !changed
+              ? data.explanation ?? 'No automatic fix is available for this diagnostic.'
+              : data.explanation ?? 'Fix applied.',
+          changed,
+          kind: data.kind,
+          noChanges: !changed,
         },
       })
     } catch (e) {
@@ -793,6 +804,7 @@ export const useStore = create<NewtonState>((set, get) => ({
       }
       get().toast(`Fix applied → ${preview.filePath}`)
       set({ fixPreview: null })
+      window.dispatchEvent(new CustomEvent('newton:diagnostics-refresh'))
     } catch (e) {
       get().toast(`Apply fix failed: ${(e as Error).message}`)
     }

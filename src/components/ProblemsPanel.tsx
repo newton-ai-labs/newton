@@ -116,6 +116,11 @@ export function ProblemsPanel({ onOpenFile }: { onOpenFile?: (path: string, line
     return () => clearInterval(interval)
   }, [fetchDiagnostics, autoRefresh])
 
+  useEffect(() => {
+    window.addEventListener('newton:diagnostics-refresh', fetchDiagnostics)
+    return () => window.removeEventListener('newton:diagnostics-refresh', fetchDiagnostics)
+  }, [fetchDiagnostics])
+
   // Group diagnostics by file
   const grouped = useMemo(() => {
     if (!result?.diagnostics) return [] as Array<{ filePath: string; diags: Diagnostic[] }>

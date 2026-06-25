@@ -244,7 +244,7 @@ function completeCommonSnippets(ctx: CompletionContext): string | null {
   // export default
   if (/^export\s+def$/.test(trimmed)) return 'ault'
 
-  // TODO: comment
+  // Blank comment starter
   if (/^\/\/\s*$/.test(trimmed) || /^#\s*$/.test(trimmed)) return 'TODO: '
 
   // async arrow

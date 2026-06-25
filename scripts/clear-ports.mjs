@@ -1,11 +1,16 @@
 /**
- * Clears stale processes on the dev ports (5173, 5174, 8787) before starting.
+ * Clears stale processes on the dev ports before starting.
  * This prevents the EADDRINUSE crashes that happen when previous dev servers
  * didn't shut down cleanly.
  */
 import { execSync } from 'node:child_process'
 
-const PORTS = [5173, 5174, 8787]
+const configuredPorts = [
+  Number(process.env.VITE_PORT),
+  Number(process.env.NEWTON_PORT),
+].filter((port) => Number.isInteger(port) && port > 0)
+const defaultPorts = [5173, 5174, 8787]
+const PORTS = Array.from(new Set(configuredPorts.length > 0 ? configuredPorts : defaultPorts))
 let killed = 0
 
 for (const port of PORTS) {
