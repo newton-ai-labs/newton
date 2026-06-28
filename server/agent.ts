@@ -11,16 +11,11 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { AgentPlan, AgentRequest, AgentStep } from '../shared/types.js'
+import { safeResolve, assertSafeDelete } from './safePath.js'
 
 const WORKSPACE = process.env.NEWTON_WORKSPACE
   ? path.resolve(process.env.NEWTON_WORKSPACE)
   : process.cwd()
-
-function safeJoin(rel: string): string {
-  const resolved = path.resolve(WORKSPACE, rel)
-  if (!resolved.startsWith(WORKSPACE)) throw new Error('Path escapes workspace root')
-  return resolved
-}
 
 let idc = 0
 const nid = () => `step-${Date.now()}-${idc++}`
@@ -335,8 +330,9 @@ function kebab(s: string): string {
  */
 export async function executeStep(step: AgentStep): Promise<AgentStep> {
   try {
-    const abs = safeJoin(step.path)
+    const abs = safeResolve(WORKSPACE, step.path)
     if (step.action === 'delete') {
+      assertSafeDelete(step.path)
       await fs.rm(abs, { recursive: true, force: true })
       return { ...step, status: 'done', note: `Deleted ${step.path}` }
     }

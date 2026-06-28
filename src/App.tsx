@@ -17,8 +17,12 @@ import {
   Rocket,
   X,
   AlertCircle,
+  ListTree,
 } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useStore } from './store'
+import ErrorBoundary from './components/ErrorBoundary'
 
 // Core components loaded immediately
 import FileExplorer from './components/FileExplorer'
@@ -35,6 +39,7 @@ const GraphPanel = lazy(() => import('./components/GraphPanel'))
 const MemoryPanel = lazy(() => import('./components/MemoryPanel'))
 const MissionPanel = lazy(() => import('./components/MissionPanel'))
 const SearchPanel = lazy(() => import('./components/SearchPanel'))
+const OutlinePanel = lazy(() => import('./components/OutlinePanel'))
 const ProblemsPanel = lazy(() => import('./components/ProblemsPanel').then(m => ({ default: m.ProblemsPanel })))
 const Composer = lazy(() => import('./components/Composer'))
 const FixPreviewModal = lazy(() => import('./components/FixPreviewModal'))
@@ -128,6 +133,7 @@ export default function App() {
   const dirty = activeTab && activeTab.content !== activeTab.savedContent
 
   return (
+    <ErrorBoundary>
     <div className="app">
      <div className="app-body">
       {/* Activity Bar */}
@@ -185,6 +191,19 @@ export default function App() {
             {gitStatus && gitStatus.changes.length > 0 && (
               <span className="activity-badge">{gitStatus.changes.length}</span>
             )}
+          </button>
+          <button
+            className={`activity-btn ${activeView === 'outline' ? 'active' : ''}`}
+            title="Symbol Outline"
+            onClick={() => {
+              if (activeView === 'outline' && sidebarVisible) setSidebarVisible(false)
+              else {
+                setActiveView('outline')
+                setSidebarVisible(true)
+              }
+            }}
+          >
+            <ListTree size={19} />
           </button>
           <button
             className={`activity-btn ${activeView === 'problems' ? 'active' : ''}`}
@@ -272,7 +291,32 @@ export default function App() {
           }}
         >
           <Sparkles size={13} className="spark" style={{ color: 'var(--blue)' }} />
-          <span style={{ flex: 1 }}>{welcomeDigest}</span>
+          <div style={{ flex: 1, minWidth: 0 }} className="welcome-digest">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                // Render paragraphs inline so the banner stays compact and
+                // preserves the flex-row layout. Without this, <p> would force
+                // a block and visually break the banner.
+                p: ({ children }) => <span style={{ marginRight: 10 }}>{children}</span>,
+                code: ({ children }) => (
+                  <code
+                    style={{
+                      background: 'color-mix(in srgb, var(--blue) 22%, transparent)',
+                      color: 'var(--blue)',
+                      padding: '1px 4px',
+                      borderRadius: 3,
+                      fontSize: 11,
+                    }}
+                  >
+                    {children}
+                  </code>
+                ),
+              }}
+            >
+              {welcomeDigest!}
+            </ReactMarkdown>
+          </div>
           <button
             className="mini-btn"
             style={{ width: 18, height: 18 }}
@@ -303,6 +347,8 @@ export default function App() {
                     <MissionPanel />
                   ) : activeView === 'search' ? (
                     <SearchPanel />
+                  ) : activeView === 'outline' ? (
+                    <OutlinePanel />
                   ) : activeView === 'problems' ? (
                     <ProblemsPanel
                       onOpenFile={(p: string, line?: number) => {
@@ -425,5 +471,6 @@ export default function App() {
       </Suspense>
       <CommandPalette />
     </div>
+    </ErrorBoundary>
   )
 }

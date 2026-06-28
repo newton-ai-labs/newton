@@ -17,6 +17,8 @@
  */
 
 import type * as MonacoNs from 'monaco-editor'
+import { useStore, providerConfig } from './store'
+import type { ProviderConfig } from '../shared/types'
 
 interface CompletionContext {
   textUntilCurrentLine: string
@@ -270,9 +272,70 @@ function increaseIndent(indent: string): string {
   return indent + '  '
 }
 
+// ---------- LLM completion fetch ----------
+/**
+ * Most-recent in-flight completion request. Aborted when a newer one starts
+ * (e.g. the user kept typing) so we never show stale ghost text.
+ */
+let pendingLlm: AbortController | null = null
+
+/**
+ * Fetch a fill-in-the-middle completion from `/api/complete`.
+ * Returns the completion string, or null if unavailable/aborted/empty.
+ *
+ * Cancellation is tied to Monaco's CancellationToken so abandoned requests
+ * (cursor moved away) are aborted promptly.
+ */
+async function fetchLlmCompletion(
+  prefix: string,
+  suffix: string,
+  language: string,
+  path: string,
+  cfg: ProviderConfig,
+  token: MonacoNs.CancellationToken,
+): Promise<string | null> {
+  // Abort any previous in-flight request — only the latest cursor position wins.
+  if (pendingLlm) pendingLlm.abort()
+  const ctrl = new AbortController()
+  pendingLlm = ctrl
+
+  // Tie abort to Monaco's cancellation (cursor moved / model disposed).
+  const cancelSub = token.onCancellationRequested(() => ctrl.abort())
+
+  // Small leading debounce so rapid keystrokes coalesce into one request.
+  await new Promise<void>((resolve) => setTimeout(resolve, 120))
+  if (ctrl.signal.aborted) return null
+
+  try {
+    const r = await fetch('/api/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: prefix, suffix, language, path, provider: cfg }),
+      signal: ctrl.signal,
+    })
+    if (!r.ok) return null
+    const data = await r.json()
+    const completion: string = data.completion ?? ''
+    return completion.trim() ? completion : null
+  } catch {
+    return null
+  } finally {
+    cancelSub.dispose()
+    if (pendingLlm === ctrl) pendingLlm = null
+  }
+}
+
 // ---------- Monaco provider registration ----------
 /**
  * Register Newton Copilot as Monaco's inline completions provider.
+ *
+ * Behavior:
+ *  - Always computes a fast, fully-offline heuristic suggestion for instant
+ *    feedback and as a guaranteed fallback.
+ *  - When a real (non-demo) provider is configured, also requests an LLM
+ *    fill-in-the-middle completion from `/api/complete`. If the LLM returns
+ *    usable text it is preferred; otherwise the heuristic is shown.
+ *
  * Returns a disposable to unregister.
  */
 export function registerCopilot(
@@ -280,27 +343,27 @@ export function registerCopilot(
   languageIds?: string[],
 ): MonacoNs.IDisposable {
   const provider: MonacoNs.languages.InlineCompletionsProvider = {
-    provideInlineCompletions: (model, position, _ctx, _token) => {
+    provideInlineCompletions: async (model, position, _ctx, token) => {
       const languageId = model.getLanguageId()
       // map monaco language id to our simplified language name
       const lang = normalizeLang(languageId)
       const fullText = model.getValue()
-      const lineCount = model.getLineCount()
 
       const lineNumber = position.lineNumber
       const column = position.column
       const currentLine = model.getLineContent(lineNumber)
+      const cursorOffset = model.getOffsetAt({ lineNumber, column })
+      const prefix = fullText.slice(0, cursorOffset)
+      const suffix = fullText.slice(cursorOffset)
       const textUntilCurrentLine = fullText.slice(
         0,
         model.getOffsetAt({ lineNumber, column: 1 }) + (column - 1),
       )
-      const textAfterCurrentLine = fullText.slice(
-        model.getOffsetAt({ lineNumber, column }),
-      )
+      const textAfterCurrentLine = suffix
 
       const indent = currentLine.match(/^\s*/)?.[0] ?? ''
 
-      const suggestion = generateCompletion({
+      const heuristic = generateCompletion({
         textUntilCurrentLine,
         currentLine: currentLine.slice(0, column - 1),
         textAfterCurrentLine,
@@ -311,12 +374,10 @@ export function registerCopilot(
         indent,
       })
 
-      if (!suggestion || !suggestion.trim()) return { items: [] }
-
-      return {
+      const buildItems = (insertText: string): MonacoNs.languages.InlineCompletions => ({
         items: [
           {
-            insertText: suggestion,
+            insertText,
             range: {
               startLineNumber: lineNumber,
               startColumn: column,
@@ -327,7 +388,26 @@ export function registerCopilot(
             filterText: currentLine.slice(0, column - 1),
           },
         ],
+      })
+
+      // Demo mode (or no real provider): heuristic only, shown immediately.
+      const cfg = providerConfig(useStore.getState().settings)
+      if (cfg.provider === 'demo') {
+        if (!heuristic || !heuristic.trim()) return { items: [] }
+        return buildItems(heuristic)
       }
+
+      // Real provider: attempt an LLM completion, falling back to heuristic.
+      // Skip the network call when there's barely any context to complete.
+      const enoughContext = prefix.replace(/\s+$/, '').length >= 3
+      if (enoughContext && !token.isCancellationRequested) {
+        const path = model.uri.path || model.uri.toString()
+        const llm = await fetchLlmCompletion(prefix, suffix, lang, path, cfg, token)
+        if (llm && llm.trim()) return buildItems(llm)
+      }
+
+      if (!heuristic || !heuristic.trim()) return { items: [] }
+      return buildItems(heuristic)
     },
     freeInlineCompletions: () => {
       /* noop */

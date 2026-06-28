@@ -22,6 +22,7 @@
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.2",
+    "express-rate-limit": "^8.5.2",
     "lucide-react": "^0.408.0",
     "monaco-editor": "^0.50.0",
     "nanoid": "^5.1.15",

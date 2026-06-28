@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Search,
   CaseSensitive,
@@ -265,7 +265,7 @@ export default function SearchPanel() {
                       onClick={() => openResult(m)}
                     >
                       <span className="search-line-num">{m.line}</span>
-                      <span className="search-line-preview" dangerouslySetInnerHTML={{ __html: highlight(m.preview, query, useRegex, caseSensitive) }} />
+                      <span className="search-line-preview">{highlight(m.preview, query, useRegex, caseSensitive)}</span>
                     </div>
                   ))}
                 </div>
@@ -292,28 +292,30 @@ function groupByFile(results: SearchResult[]): Record<string, SearchResult[]> {
   return groups
 }
 
-function highlight(text: string, query: string, isRegex: boolean, caseSensitive: boolean): string {
-  if (!query) return escapeHtml(text)
+/**
+ * Highlight matched query terms in a line of text.
+ * Returns an array of React nodes (strings and <mark> elements) so React handles all escaping — no dangerouslySetInnerHTML.
+ */
+function highlight(text: string, query: string, isRegex: boolean, caseSensitive: boolean): ReactNode[] {
+  if (!query) return [text]
   let pattern: RegExp
   try {
-    if (isRegex) {
-      pattern = new RegExp(`(${query})`, caseSensitive ? 'g' : 'gi')
-    } else {
-      pattern = new RegExp(`(${escapeRegex(query)})`, caseSensitive ? 'g' : 'gi')
-    }
+    const source = isRegex ? query : escapeRegex(query)
+    pattern = new RegExp(`(${source})`, caseSensitive ? 'g' : 'gi')
   } catch {
-    return escapeHtml(text)
+    return [text]
   }
-  return escapeHtml(text).replace(
-    new RegExp(`(${isRegex ? query : escapeRegex(query)})`, caseSensitive ? 'g' : 'gi'),
-    '<mark>$1</mark>',
-  )
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&#38;')
-    .replace(/</g, '&#60;')
-    .replace(/>/g, '&#62;')
-    .replace(/"/g, '&#34;')
+  const parts: ReactNode[] = []
+  let last = 0
+  let m: RegExpExecArray | null
+  let key = 0
+  while ((m = pattern.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index))
+    parts.push(<mark key={key++}>{m[0]}</mark>)
+    last = m.index + m[0].length
+    // Prevent zero-length match infinite loop
+    if (m.index === pattern.lastIndex) pattern.lastIndex++
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return parts
 }

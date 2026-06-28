@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { DEFAULT_SETTINGS, migrateSettings, PROVIDER_REGISTRY } from '../../shared/types'
+import { DEFAULT_SETTINGS, migrateSettings, PROVIDER_REGISTRY, SETTINGS_SCHEMA_VERSION } from '../../shared/types'
 
 describe('DEFAULT_SETTINGS', () => {
   it('has demo as default provider', () => {
@@ -72,6 +72,40 @@ describe('migrateSettings', () => {
     expect(result.provider).toBe('ollama')
     expect(result.providerConfigs.ollama?.model).toBe('mistral')
     expect(result.providerConfigs.ollama?.baseUrl).toBe('http://localhost:11434')
+  })
+
+  it('always stamps the current schema version onto migrated output', () => {
+    expect(migrateSettings({}).schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrateSettings({ provider: 'openai' }).schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    // even new-format input gets re-stamped (idempotent)
+    expect(migrateSettings({ schemaVersion: 2, providerConfigs: {} }).schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+  })
+
+  it('deep-merges partial provider config so missing fields fall back to defaults', () => {
+    // User only set apiKey; model/baseUrl must come from defaults
+    const result = migrateSettings({
+      providerConfigs: {
+        openai: { apiKey: 'sk-partial' },
+      },
+    })
+    expect(result.providerConfigs.openai?.apiKey).toBe('sk-partial')
+    expect(result.providerConfigs.openai?.model).toBe(DEFAULT_SETTINGS.providerConfigs.openai?.model)
+    expect(result.providerConfigs.openai?.baseUrl).toBe('https://api.openai.com/v1')
+  })
+
+  it('preserves user-provided values for all three fields when provided', () => {
+    const result = migrateSettings({
+      providerConfigs: {
+        anthropic: {
+          model: 'claude-custom',
+          apiKey: 'sk-ant-x',
+          baseUrl: 'https://custom.example.com',
+        },
+      },
+    })
+    expect(result.providerConfigs.anthropic?.model).toBe('claude-custom')
+    expect(result.providerConfigs.anthropic?.apiKey).toBe('sk-ant-x')
+    expect(result.providerConfigs.anthropic?.baseUrl).toBe('https://custom.example.com')
   })
 })
 

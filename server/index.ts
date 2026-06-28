@@ -5,11 +5,12 @@ import path from 'node:path'
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import rateLimit from 'express-rate-limit'
 import type { ChatRequest, EditRequest, EditResponse, FileNode, ProviderConfig, AgentRequest } from '../shared/types.js'
 import { getProtocol, getProviderDef } from '../shared/types.js'
 import { demoAnswer, streamDemo, demoEdit } from './demoAi.js'
 import { demoPlan, executeStep, llmPlan } from './agent.js'
-import { getIndex, type SearchHit } from './indexing.js'
+import { getIndex, resetIndex, type SearchHit } from './indexing.js'
 import { getGraphBuilder } from './repoGraph.js'
 import {
   getOrCreateMemory,
@@ -21,6 +22,7 @@ import {
   buildWelcomeDigest,
   buildMemoryContext,
   type WorkspaceMemory,
+  type MemoryEntry,
 } from './memory.js'
 import { assessPlan } from './consequence.js'
 import {
@@ -33,6 +35,7 @@ import {
   llmMissionPlan,
   verifyOutcome,
 } from './mission.js'
+import { safeResolve } from './safePath.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -45,19 +48,73 @@ function resolveWorkspace(): string {
   return cwd
 }
 
-const WORKSPACE = resolveWorkspace()
+// Mutable workspace - can be changed at runtime via /api/workspace
+let WORKSPACE = resolveWorkspace()
+
+export function getWorkspace(): string {
+  return WORKSPACE
+}
 
 const app = express()
-app.use(cors())
+
+// Restrict CORS to localhost origins (dev) and same-origin (prod). This
+// prevents arbitrary websites from making requests to the local Newton server.
+const localhostOriginCheck = (
+  origin: string | undefined,
+  callback: (err: Error | null, ok?: boolean) => void,
+) => {
+  // Allow same-origin requests (no Origin header) and non-browser tools (curl).
+  if (!origin) return callback(null, true)
+  try {
+    const url = new URL(origin)
+    const host = url.hostname
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') {
+      return callback(null, true)
+    }
+    return callback(null, false)
+  } catch {
+    return callback(null, false)
+  }
+}
+
+app.use(
+  cors({
+    origin: localhostOriginCheck,
+    credentials: false,
+  }),
+)
 app.use(express.json({ limit: '10mb' }))
 
+// Rate limiter for sensitive endpoints (exec, chat, nlsh, file writes).
+const sensitiveLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please slow down.' },
+})
+
+// General limiter for all other routes.
+const generalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+app.use(generalLimiter)
+
+// Completion limiter — higher limit since tab-completion fires frequently.
+const completionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
 // ---------- safety helpers ----------
+/** Resolve a workspace-relative path using the shared, hardened containment check. */
 function safeJoin(rel: string): string {
-  const resolved = path.resolve(WORKSPACE, rel)
-  if (!resolved.startsWith(WORKSPACE)) {
-    throw new Error('Path escapes workspace root')
-  }
-  return resolved
+  return safeResolve(WORKSPACE, rel)
 }
 
 const IGNORED = new Set([
@@ -101,6 +158,345 @@ async function buildTree(absDir: string, relDir: string): Promise<FileNode> {
   }
   return node
 }
+
+// ---------- workspace management ----------
+app.get('/api/workspace', (_req, res) => {
+  res.json({ path: WORKSPACE })
+})
+
+app.post('/api/workspace', async (req, res) => {
+  const { path: newPath } = req.body
+  if (!newPath || typeof newPath !== 'string') {
+    return res.status(400).json({ error: 'path is required' })
+  }
+
+  const resolved = path.resolve(newPath)
+
+  // Verify the directory exists
+  try {
+    const stats = await fs.stat(resolved)
+    if (!stats.isDirectory()) {
+      return res.status(400).json({ error: 'Path is not a directory' })
+    }
+  } catch {
+    return res.status(400).json({ error: 'Directory does not exist' })
+  }
+
+  WORKSPACE = resolved
+
+  // Clear caches for the old workspace
+  resetIndex()
+
+  console.log(`  Workspace changed to: ${WORKSPACE}`)
+  res.json({ path: WORKSPACE })
+})
+
+// ---------- file upload ----------
+app.post('/api/upload', async (req, res) => {
+  try {
+    const { files } = req.body as { files: Array<{ path: string; content: string }> }
+
+    if (!files || !Array.isArray(files)) {
+      return res.status(400).json({ error: 'files array is required' })
+    }
+
+    const results: Array<{ path: string; success: boolean; error?: string }> = []
+
+    for (const file of files) {
+      try {
+        const abs = safeJoin(file.path)
+        // Ensure parent directory exists
+        await fs.mkdir(path.dirname(abs), { recursive: true })
+        await fs.writeFile(abs, file.content, 'utf8')
+        results.push({ path: file.path, success: true })
+      } catch (e) {
+        results.push({ path: file.path, success: false, error: (e as Error).message })
+      }
+    }
+
+    res.json({ results })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+// ---------- project templates ----------
+const TEMPLATES: Record<string, { name: string; desc: string; files: Record<string, string> }> = {
+  empty: {
+    name: 'Empty Project',
+    desc: 'A blank slate',
+    files: {
+      'README.md': '# My Project\n\nA new project created with Newton.\n',
+    },
+  },
+  'react-ts': {
+    name: 'React + TypeScript',
+    desc: 'Vite-powered React with TypeScript',
+    files: {
+      'package.json': JSON.stringify({
+        name: 'my-react-app',
+        private: true,
+        version: '0.0.0',
+        type: 'module',
+        scripts: {
+          dev: 'vite',
+          build: 'tsc && vite build',
+          preview: 'vite preview',
+        },
+        dependencies: {
+          react: '^18.2.0',
+          'react-dom': '^18.2.0',
+        },
+        devDependencies: {
+          '@types/react': '^18.2.0',
+          '@types/react-dom': '^18.2.0',
+          '@vitejs/plugin-react': '^4.0.0',
+          typescript: '^5.0.0',
+          vite: '^5.0.0',
+        },
+      }, null, 2),
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: {
+          target: 'ES2020',
+          useDefineForClassFields: true,
+          lib: ['ES2020', 'DOM', 'DOM.Iterable'],
+          module: 'ESNext',
+          skipLibCheck: true,
+          moduleResolution: 'bundler',
+          allowImportingTsExtensions: true,
+          resolveJsonModule: true,
+          isolatedModules: true,
+          noEmit: true,
+          jsx: 'react-jsx',
+          strict: true,
+        },
+        include: ['src'],
+      }, null, 2),
+      'vite.config.ts': `import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+})
+`,
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>React App</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+`,
+      'src/main.tsx': `import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+import './index.css'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)
+`,
+      'src/App.tsx': `function App() {
+  return (
+    <div>
+      <h1>Hello, React!</h1>
+      <p>Edit src/App.tsx to get started.</p>
+    </div>
+  )
+}
+
+export default App
+`,
+      'src/index.css': `* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  padding: 2rem;
+}
+`,
+    },
+  },
+  'node-ts': {
+    name: 'Node.js + TypeScript',
+    desc: 'Node.js with TypeScript and tsx',
+    files: {
+      'package.json': JSON.stringify({
+        name: 'my-node-app',
+        version: '1.0.0',
+        type: 'module',
+        scripts: {
+          dev: 'tsx watch src/index.ts',
+          build: 'tsc',
+          start: 'node dist/index.js',
+        },
+        devDependencies: {
+          '@types/node': '^20.0.0',
+          tsx: '^4.0.0',
+          typescript: '^5.0.0',
+        },
+      }, null, 2),
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: {
+          target: 'ES2022',
+          module: 'ESNext',
+          moduleResolution: 'bundler',
+          outDir: 'dist',
+          strict: true,
+          esModuleInterop: true,
+          skipLibCheck: true,
+        },
+        include: ['src'],
+      }, null, 2),
+      'src/index.ts': `console.log('Hello from Node.js!')
+
+// Your code here
+`,
+    },
+  },
+  'express-api': {
+    name: 'Express API',
+    desc: 'REST API with Express and TypeScript',
+    files: {
+      'package.json': JSON.stringify({
+        name: 'my-api',
+        version: '1.0.0',
+        type: 'module',
+        scripts: {
+          dev: 'tsx watch src/index.ts',
+          build: 'tsc',
+          start: 'node dist/index.js',
+        },
+        dependencies: {
+          express: '^4.18.0',
+          cors: '^2.8.0',
+        },
+        devDependencies: {
+          '@types/express': '^4.17.0',
+          '@types/cors': '^2.8.0',
+          '@types/node': '^20.0.0',
+          tsx: '^4.0.0',
+          typescript: '^5.0.0',
+        },
+      }, null, 2),
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: {
+          target: 'ES2022',
+          module: 'ESNext',
+          moduleResolution: 'bundler',
+          outDir: 'dist',
+          strict: true,
+          esModuleInterop: true,
+          skipLibCheck: true,
+        },
+        include: ['src'],
+      }, null, 2),
+      'src/index.ts': `import express from 'express'
+import cors from 'cors'
+
+const app = express()
+app.use(cors())
+app.use(express.json())
+
+app.get('/api/hello', (req, res) => {
+  res.json({ message: 'Hello, World!' })
+})
+
+const PORT = process.env.PORT || 3000
+app.listen(PORT, () => {
+  console.log(\`Server running on http://localhost:\${PORT}\`)
+})
+`,
+    },
+  },
+  html: {
+    name: 'HTML/CSS/JS',
+    desc: 'Simple static website',
+    files: {
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Website</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Hello, World!</h1>
+  <p>Edit index.html to get started.</p>
+  <script src="script.js"></script>
+</body>
+</html>
+`,
+      'style.css': `* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  padding: 2rem;
+}
+
+h1 {
+  margin-bottom: 1rem;
+}
+`,
+      'script.js': `// Your JavaScript code here
+console.log('Hello from JavaScript!')
+`,
+    },
+  },
+}
+
+app.get('/api/templates', (_req, res) => {
+  const list = Object.entries(TEMPLATES).map(([id, t]) => ({
+    id,
+    name: t.name,
+    desc: t.desc,
+  }))
+  res.json({ templates: list })
+})
+
+app.post('/api/templates/create', async (req, res) => {
+  const { templateId, projectName } = req.body
+  if (!templateId || !TEMPLATES[templateId]) {
+    return res.status(400).json({ error: 'Invalid template' })
+  }
+  if (!projectName || typeof projectName !== 'string') {
+    return res.status(400).json({ error: 'Project name required' })
+  }
+
+  const template = TEMPLATES[templateId]
+  const projectDir = path.join(WORKSPACE, projectName)
+
+  try {
+    // Create project directory
+    await fs.mkdir(projectDir, { recursive: true })
+
+    // Write template files
+    for (const [filePath, content] of Object.entries(template.files)) {
+      const abs = path.join(projectDir, filePath)
+      await fs.mkdir(path.dirname(abs), { recursive: true })
+      await fs.writeFile(abs, content, 'utf8')
+    }
+
+    res.json({ success: true, path: projectName })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
 
 app.get('/api/file', async (req, res) => {
   try {
@@ -383,7 +779,7 @@ async function buildSystemPrompt(req: ChatRequest): Promise<string> {
   return context
 }
 
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', sensitiveLimiter, async (req, res) => {
   const body = req.body as ChatRequest
   const ac = new AbortController()
   // Listen on res, not req: in modern Node, req 'close' fires when the request
@@ -600,7 +996,7 @@ async function readSSE(
 }
 
 // ---------- inline edit endpoint (⌘K) ----------
-app.post('/api/edit', async (req, res) => {
+app.post('/api/edit', sensitiveLimiter, async (req, res) => {
   try {
     const body = req.body as EditRequest
     const provider = body.provider ?? { provider: 'demo', model: 'demo' }
@@ -680,8 +1076,55 @@ async function llmComplete(provider: ProviderConfig, system: string, user: strin
   }
 }
 
+// ---------- AI code completion (tab completion / FIM) ----------
+app.post('/api/complete', completionLimiter, async (req, res) => {
+  try {
+    const { prompt, suffix, language, path, provider: rawProvider } = req.body as {
+      prompt: string
+      suffix?: string
+      language?: string
+      path?: string
+      provider?: ProviderConfig
+    }
+
+    const provider = rawProvider ?? { provider: 'demo', model: 'demo' }
+
+    // Demo mode: return empty — the heuristic engine handles it client-side
+    if (provider.provider === 'demo') {
+      return res.json({ completion: '' })
+    }
+
+    const lang = language || 'plaintext'
+    const fileName = path ? path.split('/').pop() : 'untitled'
+
+    // Use a fill-in-the-middle style prompt for best context awareness
+    const sys =
+      'You are a fast code completion engine. Complete the code at the cursor position. ' +
+      'Return ONLY the completion text — no explanation, no markdown, no backticks. ' +
+      'The completion should be the text that goes BETWEEN the prefix and suffix. ' +
+      'Keep it concise (1-10 lines). Match the surrounding style, indentation, and conventions.'
+
+    const user =
+      `File: ${fileName}\nLanguage: ${lang}\n\n` +
+      `=== CODE BEFORE CURSOR ===\n${prompt.slice(-4000)}\n\n` +
+      `=== CODE AFTER CURSOR ===\n${(suffix || '').slice(0, 2000)}\n\n` +
+      `=== COMPLETE AT CURSOR (output only the insertion) ===`
+
+    let completion = await llmComplete(provider, sys, user)
+
+    // Clean up: remove markdown fences, trim leading newlines
+    completion = completion.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '')
+    // Don't return empty whitespace-only completions
+    if (!completion.trim()) completion = ''
+
+    res.json({ completion })
+  } catch (e) {
+    res.status(500).json({ completion: '', error: (e as Error).message })
+  }
+})
+
 // ---------- agent endpoints ----------
-app.post('/api/agent/plan', async (req, res) => {
+app.post('/api/agent/plan', sensitiveLimiter, async (req, res) => {
   try {
     const body = req.body as AgentRequest
     const provider = body.provider ?? { provider: 'demo', model: 'demo' }
@@ -840,7 +1283,7 @@ function demoComposer(body: import('../shared/types.js').ComposerRequest): impor
 }
 
 // ---------- natural-language shell (NL → command) ----------
-app.post('/api/nlsh', async (req, res) => {
+app.post('/api/nlsh', sensitiveLimiter, async (req, res) => {
   try {
     const { prompt, cwd, provider } = req.body as {
       prompt: string
@@ -912,7 +1355,7 @@ function demoNlsh(prompt: string): string {
 }
 
 // ---------- execute shell command ----------
-app.post('/api/exec', async (req, res) => {
+app.post('/api/exec', sensitiveLimiter, async (req, res) => {
   try {
     const { command } = req.body as { command: string }
     if (!command || !command.trim()) return res.json({ stdout: '', stderr: '', code: 0 })
@@ -1690,6 +2133,57 @@ async function git(args: string[]): Promise<string> {
   })
 }
 
+/** Map a file path to a Monaco/monaco-editor language id for the diff view. */
+function inferLanguage(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
+  const map: Record<string, string> = {
+    ts: 'typescript',
+    tsx: 'typescript',
+    js: 'javascript',
+    jsx: 'javascript',
+    mjs: 'javascript',
+    cjs: 'javascript',
+    py: 'python',
+    go: 'go',
+    rs: 'rust',
+    rb: 'ruby',
+    php: 'php',
+    java: 'java',
+    kt: 'kotlin',
+    c: 'c',
+    h: 'c',
+    cpp: 'cpp',
+    cc: 'cpp',
+    hpp: 'cpp',
+    cs: 'csharp',
+    swift: 'swift',
+    json: 'json',
+    yml: 'yaml',
+    yaml: 'yaml',
+    toml: 'ini',
+    ini: 'ini',
+    md: 'markdown',
+    markdown: 'markdown',
+    html: 'html',
+    htm: 'html',
+    css: 'css',
+    scss: 'scss',
+    less: 'less',
+    sh: 'shell',
+    bash: 'shell',
+    zsh: 'shell',
+    sql: 'sql',
+    xml: 'xml',
+    svg: 'xml',
+    dockerfile: 'dockerfile',
+  }
+  // Handle extensionless files like "Dockerfile" or "Makefile"
+  const base = filePath.split('/').pop() ?? ''
+  if (base.toLowerCase() === 'dockerfile') return 'dockerfile'
+  if (base.toLowerCase() === 'makefile') return 'makefile'
+  return map[ext] ?? 'plaintext'
+}
+
 app.get('/api/git/status', async (_req, res) => {
   try {
     const inRepo = await git(['rev-parse', '--is-inside-work-tree'])
@@ -1745,9 +2239,10 @@ app.get('/api/git/status', async (_req, res) => {
 
     // HEAD commit
     let head: GitStatus['head'] = null
-    const headRaw = await git(['log', '-1', '--pretty=format:%H|%s|%an|%ci'])
+    // Use ASCII unit separator (\x1f) as delimiter to avoid collisions with `|` in commit messages
+    const headRaw = await git(['log', '-1', `--pretty=format:%H\x1f%s\x1f%an\x1f%ci`])
     if (headRaw) {
-      const [hash, message, author, date] = headRaw.split('|')
+      const [hash, message, author, date] = headRaw.split('\x1f')
       head = { hash: hash.slice(0, 7), message, author, date }
     }
 
@@ -1774,6 +2269,45 @@ app.get('/api/git/diff', async (req, res) => {
     if (filePath) args.push('--', filePath)
     const diff = await git(args)
     res.json({ diff })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/**
+ * Side-by-side diff content for the Monaco DiffEditor.
+ * Returns { original, modified, language, path } where:
+ *  - staged:    original = HEAD version,  modified = index version
+ *  - unstaged:  original = index version, modified = working tree (disk)
+ * Missing refs (new/deleted files) gracefully resolve to ''.
+ */
+app.get('/api/git/diff-content', async (req, res) => {
+  try {
+    const filePath = String(req.query.path ?? '')
+    const staged = req.query.staged === 'true'
+    if (!filePath) return res.status(400).json({ error: 'path required' })
+    // Validate path stays within workspace (throws if it escapes)
+    const abs = safeJoin(filePath)
+
+    // git show returns '' (via the git() helper) when the ref doesn't exist.
+    const show = async (ref: string): Promise<string> =>
+      git(['show', `${ref}:${filePath}`])
+
+    let original = ''
+    let modified = ''
+    if (staged) {
+      original = await show('HEAD')
+      modified = await show(':')
+    } else {
+      original = await show(':')
+      try {
+        modified = await fs.readFile(abs, 'utf8')
+      } catch {
+        modified = '' // file may be deleted from the working tree
+      }
+    }
+
+    res.json({ original, modified, language: inferLanguage(filePath), path: filePath })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }
@@ -1824,11 +2358,11 @@ app.get('/api/git/log', async (req, res) => {
     const raw = await git([
       'log',
       `-${limit}`,
-      '--pretty=format:%H|%h|%s|%an|%ar',
+      `--pretty=format:%H\x1f%h\x1f%s\x1f%an\x1f%ar`,
     ])
     if (!raw) return res.json({ commits: [] })
     const commits = raw.split('\n').map((line) => {
-      const [hash, short, message, author, date] = line.split('|')
+      const [hash, short, message, author, date] = line.split('\x1f')
       return { hash, short, message, author, date }
     })
     res.json({ commits })
@@ -1965,6 +2499,64 @@ app.post('/api/git/review', async (req, res) => {
   }
 })
 
+// ---------- workspace memory ----------
+// NOTE: the client (src/store.ts) reads the JSON body directly as the
+// WorkspaceMemory object (e.g. `set({ memory: await r.json() })`), so these
+// handlers return `mem` directly — NOT wrapped in `{ memory: mem }`. The
+// welcome endpoint is read via `wd.digest`, so it returns `{ digest: ... }`.
+app.get('/api/memory', async (_req, res) => {
+  try {
+    const mem = await getOrCreateMemory(WORKSPACE)
+    res.json(mem)
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.get('/api/memory/welcome', async (_req, res) => {
+  try {
+    const mem = await getOrCreateMemory(WORKSPACE)
+    res.json({ digest: buildWelcomeDigest(mem) })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.post('/api/memory/refresh', async (_req, res) => {
+  try {
+    const mem = await refreshMemory(WORKSPACE)
+    res.json(mem)
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.post('/api/memory/entry', async (req, res) => {
+  try {
+    const { type, text, source } = req.body as {
+      type: MemoryEntry['type']
+      text: string
+      source?: string
+    }
+    if (!type || !text || !text.trim()) {
+      return res.status(400).json({ error: 'type and text are required' })
+    }
+    const mem = await memAddEntry(WORKSPACE, type, text, source)
+    res.json(mem)
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+app.delete('/api/memory/entry/:id', async (req, res) => {
+  try {
+    const mem = await memRemoveEntry(WORKSPACE, req.params.id)
+    res.json(mem)
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
 /** Demo heuristic: generate a conventional commit message from a diff. */
 function demoCommitMessage(diff: string): string {
   const added = (diff.match(/^\+[^+]/gm) || []).length
@@ -2054,7 +2646,8 @@ function demoCodeReview(diff: string, files: string[]): import('../shared/types.
         message: 'Debug `console.log` found — consider removing before production.',
       })
     }
-    if (/==[^=]/.test(line) && !/===/.test(line)) {
+    // Match `==` loose equality but exclude `===`, `<=`, `>=`, `!=`, `==` in `!==`
+    if (/(?<![=!<>])==(?!=[=])(?!=)/.test(line)) {
       findings.push({
         severity: 'warning',
         category: 'bug',

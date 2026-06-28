@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import {
   ChevronRight,
   FilePlus,
@@ -7,10 +7,13 @@ import {
   Trash2,
   Folder,
   FolderOpen,
+  Upload,
+  Sparkles,
 } from 'lucide-react'
 import { useStore } from '../store'
 import type { FileNode } from '../../shared/types'
 import { fileIcon, fileColor } from './fileIcons'
+import TemplatesModal from './TemplatesModal'
 
 export default function FileExplorer() {
   const tree = useStore((s) => s.tree)
@@ -20,6 +23,8 @@ export default function FileExplorer() {
   const expanded = useStore((s) => s.expandedDirs)
   const toggleDir = useStore((s) => s.toggleDir)
   const openFile = useStore((s) => s.openFile)
+  const openFolder = useStore((s) => s.openFolder)
+  const uploadFiles = useStore((s) => s.uploadFiles)
   const activeTabPath = useStore((s) => {
     const t = s.tabs.find((x) => x.id === s.activeTabId)
     return t?.path ?? null
@@ -30,6 +35,49 @@ export default function FileExplorer() {
     { parent: string } | null
   >(null)
   const [newName, setNewName] = useState('')
+  const [showOpenFolder, setShowOpenFolder] = useState(false)
+  const [showTemplates, setShowTemplates] = useState(false)
+  const [folderPath, setFolderPath] = useState('')
+  const [dragOver, setDragOver] = useState(false)
+
+  const handleOpenFolder = async () => {
+    if (!folderPath.trim()) return
+    await openFolder(folderPath.trim())
+    setShowOpenFolder(false)
+    setFolderPath('')
+  }
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+
+    const items = e.dataTransfer.items
+    const files: Array<{ path: string; content: string }> = []
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.kind === 'file') {
+        const file = item.getAsFile()
+        if (file) {
+          const content = await file.text()
+          files.push({ path: file.name, content })
+        }
+      }
+    }
+
+    if (files.length > 0) {
+      await uploadFiles(files)
+    }
+  }, [uploadFiles])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback(() => {
+    setDragOver(false)
+  }, [])
 
   const startCreate = (parent: string) => {
     setCreating({ parent })
@@ -56,10 +104,47 @@ export default function FileExplorer() {
           onNewFile={() => startCreate('')}
           onNewFolder={() => startCreate('')}
           onRefresh={refreshTree}
+          onOpenFolder={() => setShowOpenFolder(true)}
         />
-        <div className="file-tree" style={{ color: 'var(--text-faint)', fontSize: 13, padding: 16 }}>
-          {loading ? 'Loading…' : 'No folder open.'}
+        <div
+          className={`file-tree ${dragOver ? 'drag-over' : ''}`}
+          style={{ color: 'var(--text-faint)', fontSize: 13, padding: 16 }}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+        >
+          {loading ? 'Loading…' : (
+            <div style={{ textAlign: 'center' }}>
+              <p>No folder open.</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+                <button
+                  className="btn-secondary"
+                  onClick={() => setShowOpenFolder(true)}
+                >
+                  <FolderOpen size={14} /> Open Folder
+                </button>
+                <button
+                  className="btn-secondary"
+                  onClick={() => setShowTemplates(true)}
+                >
+                  <Sparkles size={14} /> New from Template
+                </button>
+              </div>
+            </div>
+          )}
         </div>
+        {showOpenFolder && (
+          <OpenFolderModal
+            value={folderPath}
+            onChange={setFolderPath}
+            onSubmit={handleOpenFolder}
+            onClose={() => setShowOpenFolder(false)}
+          />
+        )}
+        <TemplatesModal
+          open={showTemplates}
+          onClose={() => setShowTemplates(false)}
+        />
       </div>
     )
   }
@@ -70,8 +155,15 @@ export default function FileExplorer() {
         onNewFile={() => startCreate(tree.path === '.' ? '' : tree.path)}
         onNewFolder={() => startCreate(tree.path === '.' ? '' : tree.path)}
         onRefresh={refreshTree}
+        onOpenFolder={() => setShowOpenFolder(true)}
+        onNewFromTemplate={() => setShowTemplates(true)}
       />
-      <div className="file-tree">
+      <div
+        className={`file-tree ${dragOver ? 'drag-over' : ''}`}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+      >
         {creating && (
           <div style={{ padding: '2px 8px' }}>
             <input
@@ -103,6 +195,18 @@ export default function FileExplorer() {
           />
         ))}
       </div>
+      {showOpenFolder && (
+        <OpenFolderModal
+          value={folderPath}
+          onChange={setFolderPath}
+          onSubmit={handleOpenFolder}
+          onClose={() => setShowOpenFolder(false)}
+        />
+      )}
+      <TemplatesModal
+        open={showTemplates}
+        onClose={() => setShowTemplates(false)}
+      />
     </div>
   )
 }
@@ -111,15 +215,27 @@ function Header({
   onNewFile,
   onNewFolder,
   onRefresh,
+  onOpenFolder,
+  onNewFromTemplate,
 }: {
   onNewFile: () => void
   onNewFolder: () => void
   onRefresh: () => void
+  onOpenFolder: () => void
+  onNewFromTemplate?: () => void
 }) {
   return (
     <div className="sidebar-header">
       <span>Explorer</span>
       <div className="actions">
+        <button className="mini-btn" title="Open Folder" onClick={onOpenFolder}>
+          <FolderOpen size={14} />
+        </button>
+        {onNewFromTemplate && (
+          <button className="mini-btn" title="New from Template" onClick={onNewFromTemplate}>
+            <Sparkles size={13} />
+          </button>
+        )}
         <button className="mini-btn" title="New File" onClick={onNewFile}>
           <FilePlus size={14} />
         </button>
@@ -129,6 +245,47 @@ function Header({
         <button className="mini-btn" title="Refresh" onClick={onRefresh}>
           <RefreshCw size={13} />
         </button>
+      </div>
+    </div>
+  )
+}
+
+function OpenFolderModal({
+  value,
+  onChange,
+  onSubmit,
+  onClose,
+}: {
+  value: string
+  onChange: (v: string) => void
+  onSubmit: () => void
+  onClose: () => void
+}) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 500 }}>
+        <div className="modal-header">
+          <h2>Open Folder</h2>
+        </div>
+        <div className="modal-body">
+          <p className="hint" style={{ marginBottom: 12 }}>
+            Enter the full path to a folder on your system.
+          </p>
+          <input
+            autoFocus
+            className="input"
+            placeholder="/path/to/your/project"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && onSubmit()}
+          />
+        </div>
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={onSubmit}>
+            <FolderOpen size={14} /> Open
+          </button>
+        </div>
       </div>
     </div>
   )

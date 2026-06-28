@@ -157,6 +157,11 @@ function CodeView({
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const [editorInst, setEditorInst] = useState<editor.IStandaloneCodeEditor | null>(null)
   const [monacoInst, setMonacoInst] = useState<typeof MonacoNs | null>(null)
+  // Hold the global Monaco provider disposables so we can clean them up on
+  // unmount. registerCopilot and setupCodeLens register GLOBAL per-language
+  // providers that are NOT tied to the editor instance's lifecycle.
+  const copilotDisposableRef = useRef<MonacoNs.IDisposable | null>(null)
+  const lensDisposableRef = useRef<MonacoNs.IDisposable | null>(null)
 
   const beforeMount: BeforeMount = (monaco) => {
     // Define a custom dark theme once
@@ -213,12 +218,9 @@ function CodeView({
 
     // Newton Copilot: ghost-text completions (Tab to accept)
     const copilot = registerCopilot(monaco)
+    copilotDisposableRef.current = copilot
     // Ensure inline suggestions are enabled
     ed.updateOptions({ inlineSuggest: { enabled: true } })
-    // store disposable on editor for cleanup
-    const copilotDispose = copilot
-    ;(ed as unknown as { _copilotDispose?: () => void })._copilotDispose =
-      copilotDispose.dispose
 
     // Code Lens: ✨ Explain · ♻️ Refactor · 🧪 Tests above each symbol
     const handleLensAction = (action: CodeLensAction, sym: DetectedSymbol, code: string) => {
@@ -235,13 +237,45 @@ function CodeView({
       void sendMessage(prompt)
     }
     const lensDispose = setupCodeLens(ed, monaco, handleLensAction)
-    ;(ed as unknown as { _lensDispose?: () => void })._lensDispose = lensDispose.dispose
+    lensDisposableRef.current = lensDispose
   }
+
+  // Dispose global Monaco providers (Copilot + Code Lens) on unmount.
+  // CodeView is keyed by tab id, so every file switch unmounts/remounts. Both
+  // registerCopilot and setupCodeLens register GLOBAL per-language providers
+  // that survive editor disposal — without this cleanup, providers would
+  // compound on each switch, causing duplicate ghost completions and code
+  // lenses (and a growing per-keystroke performance cost) after just a few
+  // tab switches.
+  useEffect(() => {
+    return () => {
+      copilotDisposableRef.current?.dispose()
+      lensDisposableRef.current?.dispose()
+      copilotDisposableRef.current = null
+      lensDisposableRef.current = null
+    }
+  }, [])
 
   // keep settings font in sync
   useEffect(() => {
     editorRef.current?.updateOptions({ fontSize })
   }, [fontSize])
+
+  // Listen for goto-line events (from Outline panel, Problems panel, etc.)
+  useEffect(() => {
+    const onGotoLine = (e: Event) => {
+      const detail = (e as CustomEvent<{ line: number; column?: number }>).detail
+      if (!detail || !editorRef.current) return
+      const lineNumber = Math.max(1, detail.line | 0)
+      const column = Math.max(1, (detail.column ?? 1) | 0)
+      const ed = editorRef.current
+      ed.revealLineInCenter(lineNumber)
+      ed.setPosition({ lineNumber, column })
+      ed.focus()
+    }
+    window.addEventListener('newton:goto-line', onGotoLine)
+    return () => window.removeEventListener('newton:goto-line', onGotoLine)
+  }, [])
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>

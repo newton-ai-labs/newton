@@ -45,18 +45,19 @@ function extractName(text: string): { name: string; kind: string } | null {
 }
 
 /**
- * Scan a Monaco model for top-level-ish symbol declarations.
- * Returns symbols with their start/end line ranges.
+ * Scan raw text for top-level-ish symbol declarations.
+ * Returns symbols with their start/end line ranges (1-based).
+ * Shared by the Monaco Code Lens provider and the Outline panel.
  */
-export function detectSymbols(model: monaco.editor.ITextModel): DetectedSymbol[] {
-  const lineCount = model.getLineCount()
+export function detectSymbolsInText(text: string): DetectedSymbol[] {
+  const lines = text.split('\n')
+  const lineCount = lines.length
   const starts: DetectedSymbol[] = []
 
-  for (let i = 1; i <= lineCount; i++) {
-    const text = model.getLineContent(i)
-    const hit = extractName(text)
+  for (let i = 0; i < lineCount; i++) {
+    const hit = extractName(lines[i])
     if (hit) {
-      starts.push({ name: hit.name, kind: hit.kind, startLine: i, endLine: i })
+      starts.push({ name: hit.name, kind: hit.kind, startLine: i + 1, endLine: i + 1 })
     }
   }
 
@@ -68,6 +69,14 @@ export function detectSymbols(model: monaco.editor.ITextModel): DetectedSymbol[]
 
   // cap to avoid perf issues in very large files
   return starts.slice(0, 80)
+}
+
+/**
+ * Scan a Monaco model for top-level-ish symbol declarations.
+ * Returns symbols with their start/end line ranges.
+ */
+export function detectSymbols(model: monaco.editor.ITextModel): DetectedSymbol[] {
+  return detectSymbolsInText(model.getValue())
 }
 
 /**

@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
+import { atomicWrite } from './atomicWrite.js'
 
 export interface MemoryEntry {
   id: string
@@ -63,9 +64,8 @@ export async function loadMemory(workspace: string): Promise<WorkspaceMemory | n
 }
 
 async function saveMemory(workspace: string, mem: WorkspaceMemory): Promise<void> {
-  const dir = path.join(workspace, MEMORY_DIR)
-  await fs.mkdir(dir, { recursive: true })
-  await fs.writeFile(memoryPath(workspace), JSON.stringify(mem, null, 2), 'utf8')
+  // Atomic write prevents readers from seeing a partially-written memory file.
+  await atomicWrite(memoryPath(workspace), JSON.stringify(mem, null, 2))
 }
 
 // ---------- tech-stack detection ----------
@@ -199,12 +199,32 @@ const IGNORED_DIRS = new Set([
   'coverage', '.vscode', '.idea',
 ])
 
+/**
+ * Best-effort removal of string-literal contents from a single line of source.
+ * Prevents TODO/FIXME markers that appear *inside* string literals — such as
+ * generated test scaffolds that embed `# TODO: provide realistic arguments` —
+ * from being reported as real code tasks. Template literals are stripped first
+ * (they may contain quotes), then double- and single-quoted strings. Unbalanced
+ * quotes leave the line unchanged, which is the safe fallback.
+ */
+function stripStringLiterals(line: string): string {
+  return line
+    .replace(/`(?:[^`\\]|\\.)*`/g, '``')
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+}
+
 async function scanOpenTasks(workspace: string, maxFiles = 200): Promise<WorkspaceMemory['openTasks']> {
   const tasks: WorkspaceMemory['openTasks'] = []
   const todoRegex = /(?:\/\/|#|;|\/\*|<!--|--)\s*(TODO|FIXME|HACK|XXX|BUG)\b[:\s]*(.*)/i
 
+  const MAX_TASKS = 50
   async function walk(dir: string, relBase: string, count: { n: number }) {
-    if (count.n >= maxFiles) return
+    // Both caps must be checked at every recursion level, otherwise a cap hit
+    // inside a child directory only returns that frame and the parent keeps
+    // scanning (pushing tasks past 50). The maxFiles cap already works because
+    // it's checked here and inside the loop; the tasks cap must be too.
+    if (count.n >= maxFiles || tasks.length >= MAX_TASKS) return
     let entries
     try {
       entries = await fs.readdir(dir, { withFileTypes: true })
@@ -212,7 +232,7 @@ async function scanOpenTasks(workspace: string, maxFiles = 200): Promise<Workspa
       return
     }
     for (const entry of entries) {
-      if (count.n >= maxFiles) return
+      if (count.n >= maxFiles || tasks.length >= MAX_TASKS) return
       if (IGNORED_DIRS.has(entry.name)) continue
       const full = path.join(dir, entry.name)
       const rel = relBase ? `${relBase}/${entry.name}` : entry.name
@@ -226,7 +246,10 @@ async function scanOpenTasks(workspace: string, maxFiles = 200): Promise<Workspa
           const content = await fs.readFile(full, 'utf8')
           const lines = content.split('\n')
           for (let i = 0; i < lines.length; i++) {
-            const m = lines[i].match(todoRegex)
+            // Strip string-literal contents before scanning, so TODO markers
+            // embedded in string literals (e.g. generated test scaffolds) are
+            // not mistaken for real code tasks.
+            const m = stripStringLiterals(lines[i]).match(todoRegex)
             if (m) {
               tasks.push({
                 file: rel,
@@ -234,7 +257,7 @@ async function scanOpenTasks(workspace: string, maxFiles = 200): Promise<Workspa
                 tag: m[1].toUpperCase(),
                 text: m[2].trim().slice(0, 120),
               })
-              if (tasks.length >= 50) return
+              if (tasks.length >= MAX_TASKS) return
             }
           }
         } catch { /* ignore */ }

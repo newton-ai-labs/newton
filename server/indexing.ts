@@ -19,6 +19,7 @@
 import fs from 'node:fs/promises'
 import { existsSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { atomicWrite } from './atomicWrite.js'
 
 // ---------- Types ----------
 export interface CodeChunk {
@@ -531,10 +532,11 @@ export class CodebaseIndex {
           mtime: ic.mtime,
         })),
       }
-      await fs.writeFile(
+      // Atomic write prevents a half-written index cache from blocking
+      // startup reads or corrupting the search index.
+      await atomicWrite(
         path.join(this.workspace, '.newton-index.json'),
         JSON.stringify(data),
-        'utf8',
       )
     } catch {
       // persistence is best-effort
@@ -582,4 +584,8 @@ export function getIndex(workspace: string): CodebaseIndex {
     indexInstance = new CodebaseIndex(workspace)
   }
   return indexInstance
+}
+
+export function resetIndex(): void {
+  indexInstance = null
 }

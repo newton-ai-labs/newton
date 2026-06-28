@@ -15,6 +15,7 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { existsSync } from 'fs'
+import { atomicWrite } from './atomicWrite.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -534,9 +535,9 @@ export class RepoGraphBuilder {
 
   private async persist() {
     if (!this.graph) return
-    const dir = path.dirname(this.graphPath)
-    if (!existsSync(dir)) await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(
+    // Atomic write prevents the graph cache from being left partially-written
+    // if the process is interrupted during a large workspace build.
+    await atomicWrite(
       this.graphPath,
       JSON.stringify({ version: GRAPH_VERSION, graph: this.graph, mtimes: this.mtimes }, null, 2),
     )

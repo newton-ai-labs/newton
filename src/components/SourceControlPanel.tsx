@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { DiffEditor } from '@monaco-editor/react'
 import {
   GitBranch,
   GitCommitHorizontal,
@@ -41,6 +42,8 @@ export default function SourceControlPanel() {
   const gitInit = useStore((s) => s.gitInit)
   const viewDiff = useStore((s) => s.viewDiff)
   const diffText = useStore((s) => s.diffText)
+  const diffContent = useStore((s) => s.diffContent)
+  const diffBusy = useStore((s) => s.diffBusy)
   const clearDiff = useStore((s) => s.clearDiff)
   const openFile = useStore((s) => s.openFile)
   // AI SCM actions
@@ -314,20 +317,45 @@ export default function SourceControlPanel() {
               </div>
             )}
 
-            <pre className="scm-diff-text">
-              {diffText.split('\n').map((line, i) => {
-                let cls = 'diff-line'
-                if (line.startsWith('+') && !line.startsWith('+++')) cls += ' diff-add'
-                else if (line.startsWith('-') && !line.startsWith('---')) cls += ' diff-del'
-                else if (line.startsWith('@@')) cls += ' diff-hunk'
-                else if (line.startsWith('diff ') || line.startsWith('index ')) cls += ' diff-meta'
-                return (
-                  <div key={i} className={cls}>
-                    {line || ' '}
-                  </div>
-                )
-              })}
-            </pre>
+            {diffBusy && (
+              <div className="scm-diff-loading">Loading diff…</div>
+            )}
+            {diffContent ? (
+              <div className="scm-diff-monaco">
+                <DiffEditor
+                  height="60vh"
+                  theme="vs-dark"
+                  original={diffContent.original}
+                  modified={diffContent.modified}
+                  language={diffContent.language}
+                  options={{
+                    readOnly: true,
+                    renderSideBySide: true,
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true,
+                    fontSize: 13,
+                    fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+                    scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+                  }}
+                />
+              </div>
+            ) : (
+              <pre className="scm-diff-text">
+                {diffText.split('\n').map((line, i) => {
+                  let cls = 'diff-line'
+                  if (line.startsWith('+') && !line.startsWith('+++')) cls += ' diff-add'
+                  else if (line.startsWith('-') && !line.startsWith('---')) cls += ' diff-del'
+                  else if (line.startsWith('@@')) cls += ' diff-hunk'
+                  else if (line.startsWith('diff ') || line.startsWith('index ')) cls += ' diff-meta'
+                  return (
+                    <div key={i} className={cls}>
+                      {line || ' '}
+                    </div>
+                  )
+                })}
+              </pre>
+            )}
           </div>
         </div>
       )}

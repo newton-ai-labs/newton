@@ -292,6 +292,8 @@ export interface PerProviderSettings {
 }
 
 export interface Settings {
+  /** Increment when the persisted shape changes so migration can detect old versions. */
+  schemaVersion: number
   provider: Provider
   /** Generic per-provider config map — supports any provider in the registry. */
   providerConfigs: Partial<Record<Provider, PerProviderSettings>>
@@ -299,6 +301,9 @@ export interface Settings {
   fontSize: number
   systemPrompt: string
 }
+
+/** Current persisted-settings schema version. Bump when shape changes. */
+export const SETTINGS_SCHEMA_VERSION = 2
 
 /** Build default provider configs from the registry (first model as default). */
 function buildDefaultProviderConfigs(): Partial<Record<Provider, PerProviderSettings>> {
@@ -315,6 +320,7 @@ function buildDefaultProviderConfigs(): Partial<Record<Provider, PerProviderSett
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  schemaVersion: SETTINGS_SCHEMA_VERSION,
   provider: 'demo',
   providerConfigs: buildDefaultProviderConfigs(),
   theme: 'newton-dark',
@@ -328,23 +334,68 @@ export const DEFAULT_SETTINGS: Settings = {
  * Legacy shape had openaiModel/openaiApiKey/etc flat fields.
  */
 export function migrateSettings(raw: Record<string, any>): Settings {
-  // If already in new format, merge with defaults
+  const rawVersion = typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 1
+
+  // If already in new format, deep-merge each provider config with defaults
   if (raw.providerConfigs && typeof raw.providerConfigs === 'object') {
-    return { ...DEFAULT_SETTINGS, ...raw, providerConfigs: { ...DEFAULT_SETTINGS.providerConfigs, ...raw.providerConfigs } }
+    const mergedConfigs = { ...DEFAULT_SETTINGS.providerConfigs }
+    for (const [providerId, userCfgRaw] of Object.entries(raw.providerConfigs)) {
+      const def = mergedConfigs[providerId as Provider]
+      const userCfg = (userCfgRaw ?? {}) as Partial<PerProviderSettings>
+      mergedConfigs[providerId as Provider] = {
+        model: userCfg.model ?? def?.model ?? '',
+        apiKey: userCfg.apiKey ?? def?.apiKey ?? '',
+        baseUrl: userCfg.baseUrl ?? def?.baseUrl ?? '',
+      }
+    }
+    // Validate provider against the registry
+    const knownIds = new Set(PROVIDER_REGISTRY.map((p) => p.id))
+    const provider: Provider = knownIds.has(raw.provider) ? (raw.provider as Provider) : 'demo'
+    return {
+      ...DEFAULT_SETTINGS,
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      provider,
+      providerConfigs: mergedConfigs,
+      theme: raw.theme === 'newton-light' ? 'newton-light' : 'newton-dark',
+      fontSize: typeof raw.fontSize === 'number' && raw.fontSize >= 8 && raw.fontSize <= 32 ? raw.fontSize : 13,
+      systemPrompt: typeof raw.systemPrompt === 'string' ? raw.systemPrompt : DEFAULT_SETTINGS.systemPrompt,
+    }
   }
-  // Legacy migration
+
+  // Legacy (v1) migration — flat openaiModel/openaiApiKey/etc fields
   const configs = buildDefaultProviderConfigs()
   if (raw.openaiModel || raw.openaiApiKey || raw.openaiBaseUrl) {
-    configs.openai = { model: raw.openaiModel || 'gpt-4o-mini', apiKey: raw.openaiApiKey || '', baseUrl: raw.openaiBaseUrl || 'https://api.openai.com/v1' }
+    configs.openai = {
+      ...(configs.openai ?? {}),
+      model: raw.openaiModel || 'gpt-4o-mini',
+      apiKey: raw.openaiApiKey || '',
+      baseUrl: raw.openaiBaseUrl || 'https://api.openai.com/v1',
+    }
   }
   if (raw.anthropicModel || raw.anthropicApiKey) {
-    configs.anthropic = { model: raw.anthropicModel || 'claude-3-5-sonnet-20241022', apiKey: raw.anthropicApiKey || '', baseUrl: 'https://api.anthropic.com' }
+    configs.anthropic = {
+      ...(configs.anthropic ?? {}),
+      model: raw.anthropicModel || 'claude-3-5-sonnet-20241022',
+      apiKey: raw.anthropicApiKey || '',
+      baseUrl: 'https://api.anthropic.com',
+    }
   }
   if (raw.ollamaModel || raw.ollamaBaseUrl) {
-    configs.ollama = { model: raw.ollamaModel || 'llama3.1', apiKey: '', baseUrl: raw.ollamaBaseUrl || 'http://localhost:11434' }
+    configs.ollama = {
+      ...(configs.ollama ?? {}),
+      model: raw.ollamaModel || 'llama3.1',
+      apiKey: '',
+      baseUrl: raw.ollamaBaseUrl || 'http://localhost:11434',
+    }
   }
+  void rawVersion // version tracked above; reserved for future versioned migrations
+  // Validate provider against the registry — fall back to demo on unknown values
+  const knownProviderIds = new Set(PROVIDER_REGISTRY.map((p) => p.id))
+  const provider: Provider = knownProviderIds.has(raw.provider) ? (raw.provider as Provider) : 'demo'
   return {
-    provider: raw.provider || 'demo',
+    ...DEFAULT_SETTINGS,
+    schemaVersion: SETTINGS_SCHEMA_VERSION,
+    provider,
     providerConfigs: configs,
     theme: raw.theme || 'newton-dark',
     fontSize: raw.fontSize || 13,

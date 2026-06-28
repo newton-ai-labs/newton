@@ -388,20 +388,80 @@ Computes the **blast radius** of changing a file — all files that transitively
 
 ## Workspace Memory
 
+The memory subsystem persists a per-workspace `WorkspaceMemory` document under `.newton/memory.json`. It captures the detected tech stack, a codebase structure digest, a TODO/FIXME/HACK scan, recently edited files, and user/AI-curated entries (decisions, notes, patterns, tasks). Every mutating endpoint returns the full updated memory object.
+
 ### `GET /api/memory`
-Returns the full `WorkspaceMemory` object: tech stack, structure summary, TODO/FIXME scan, and user/AI entries.
+Returns the full `WorkspaceMemory` object: tech stack, structure digest, TODO/FIXME scan, recent files, and user/AI entries.
+
+**Response:** A `WorkspaceMemory` (returned directly as the JSON body).
+```json
+{
+  "version": 1,
+  "workspaceName": "my-project",
+  "createdAt": "2026-06-24T15:35:33.983Z",
+  "lastVisited": "2026-06-24T15:35:33.983Z",
+  "visitCount": 1,
+  "techStack": [
+    { "name": "Node.js", "category": "runtime" },
+    { "name": "TypeScript", "category": "language" },
+    { "name": "React", "version": "^18.3.1", "category": "framework" },
+    { "name": "Express", "version": "^4.22.2", "category": "framework" }
+  ],
+  "entries": [],
+  "openTasks": [
+    { "file": "src/store.ts", "line": 42, "tag": "TODO", "text": "refactor this" }
+  ],
+  "recentFiles": [
+    { "path": "src/App.tsx", "lastSeen": "2026-06-24T19:18:24.171Z" }
+  ],
+  "digest": {
+    "totalFiles": 43,
+    "totalLines": 21508,
+    "topLanguages": [{ "lang": "TypeScript", "count": 30, "pct": 70 }],
+    "generatedAt": "2026-06-24T15:35:34.004Z"
+  }
+}
+```
+
+### `GET /api/memory/welcome`
+Builds a natural-language "welcome back" greeting from the memory (tech stack, codebase size, open tasks, recent files, recorded decisions). Used by the Memory panel header.
+
+**Response:**
+```json
+{ "digest": "👋 Welcome back to **my-project**.\nLast visit: 2d ago · Visit #3.\n\n📦 **Stack:** TypeScript, React, Express\n🔧 **Tools:** Vite, Git\n📊 **Codebase:** 43 files · 21,508 lines\n⚠️ **Open tasks:** 6 markers found\n💡 **Decisions:** 2 recorded" }
+```
 
 ### `POST /api/memory/refresh`
-Re-scans the workspace (tech stack detection, structure, TODOs) and returns the updated memory.
+Re-scans the workspace (tech-stack detection, structure digest, TODO markers) and bumps the visit counter. User-curated `entries` and `recentFiles` are preserved; only auto-detected fields are refreshed.
+
+**Response:** The refreshed `WorkspaceMemory` (returned directly as the JSON body).
 
 ### `POST /api/memory/entry`
-Adds a manual memory entry (decision / note / pattern).
+Adds a manual memory entry (decision / task / note / pattern). New entries are prepended (most recent first).
 
-**Body:** `{ "type": "decision", "text": "We use Zustand for state, not Redux." }`
+**Body:**
+```json
+{
+  "type": "decision",
+  "text": "We use Zustand for state, not Redux.",
+  "source": "manual"
+}
+```
+| field | type | required | description |
+|-------|------|----------|-------------|
+| `type` | `'decision' \| 'task' \| 'note' \| 'pattern'` | ✅ | Entry category |
+| `text` | `string` | ✅ | Non-empty entry text |
+| `source` | `string` | ❌ | Optional provenance (e.g. a file path, or `"manual"`) |
 
-### `DELETE /api/memory/entry?id=<id>`
-Removes a memory entry by id.
+**Response:** The updated `WorkspaceMemory` (returned directly as the JSON body).
 
+### `DELETE /api/memory/entry/:id`
+Removes a memory entry by its id. The id is a **path parameter**. Removing a non-existent id is a no-op (still returns `200` with the unchanged memory).
+
+**Response:** The updated `WorkspaceMemory` (returned directly as the JSON body).
+
+> 💡 **Response shapes:** Every memory endpoint returns the `WorkspaceMemory` object **directly** as the top-level JSON body (not wrapped under `data` or `memory`), except `/api/memory/welcome` which returns `{ "digest": string }`. The frontend reads these accordingly (`src/store.ts` → `loadMemory`, `refreshMemory`, `addMemoryEntry`, `removeMemoryEntry`).
+>
 > 💡 The chat endpoint (`POST /api/chat`) automatically injects a compact workspace-memory digest (tech stack + recent entries) into the system prompt.
 
 ---

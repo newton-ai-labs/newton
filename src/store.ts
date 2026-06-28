@@ -33,6 +33,9 @@ interface Toast {
 }
 
 interface NewtonState {
+  // workspace
+  workspacePath: string | null
+
   // files
   tree: FileNode | null
   treeLoading: boolean
@@ -51,7 +54,7 @@ interface NewtonState {
   paletteOpen: boolean
   sidebarVisible: boolean
   chatVisible: boolean
-  activeView: 'explorer' | 'search' | 'scm' | 'graph' | 'memory' | 'mission' | 'problems'
+  activeView: 'explorer' | 'search' | 'scm' | 'graph' | 'memory' | 'mission' | 'problems' | 'outline'
   settings: Settings
   toasts: Toast[]
 
@@ -60,6 +63,8 @@ interface NewtonState {
   gitBusy: boolean
   diffText: string | null
   diffBusy: boolean
+  /** Side-by-side diff content for the Monaco DiffEditor (original vs modified). */
+  diffContent: { original: string; modified: string; language: string; path: string } | null
   /** AI-generated explanation or review of a diff (shown in modal) */
   aiInsight: { kind: 'explain' | 'review'; text: string } | null
   aiInsightBusy: boolean
@@ -73,6 +78,9 @@ interface NewtonState {
 
   // actions
   refreshTree: () => Promise<void>
+  openFolder: (folderPath: string) => Promise<void>
+  uploadFiles: (files: Array<{ path: string; content: string }>) => Promise<void>
+  createFromTemplate: (templateId: string, projectName: string) => Promise<void>
   openFile: (path: string) => Promise<void>
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
@@ -149,7 +157,7 @@ interface NewtonState {
   setPaletteOpen: (v: boolean) => void
   setSidebarVisible: (v: boolean) => void
   setChatVisible: (v: boolean) => void
-  setActiveView: (v: 'explorer' | 'search' | 'scm' | 'graph' | 'memory' | 'mission' | 'problems') => void
+  setActiveView: (v: 'explorer' | 'search' | 'scm' | 'graph' | 'memory' | 'mission' | 'problems' | 'outline') => void
   toast: (text: string) => void
 
   // git / source control
@@ -315,7 +323,7 @@ function guessTestPath(filePath: string): string {
  * Build a ProviderConfig from the new registry-driven Settings.
  * Reads the per-provider config map (providerConfigs) for the active provider.
  */
-function providerConfig(s: Settings): ProviderConfig {
+export function providerConfig(s: Settings): ProviderConfig {
   if (s.provider === 'demo') return { provider: 'demo', model: 'demo' }
   const pc = s.providerConfigs[s.provider]
   return {
@@ -330,6 +338,8 @@ let abortCtrl: AbortController | null = null
 
 // ---------- store ----------
 export const useStore = create<NewtonState>((set, get) => ({
+  workspacePath: null,
+
   tree: null,
   treeLoading: false,
   expandedDirs: {},
@@ -359,6 +369,7 @@ export const useStore = create<NewtonState>((set, get) => ({
   gitBusy: false,
   diffText: null,
   diffBusy: false,
+  diffContent: null,
   aiInsight: null,
   aiInsightBusy: false,
 
@@ -376,9 +387,76 @@ export const useStore = create<NewtonState>((set, get) => ({
       // expand root by default
       const expanded = { ...get().expandedDirs }
       if (data.tree) expanded[data.tree.path] = true
-      set({ tree: data.tree, treeLoading: false, expandedDirs: expanded })
+      set({ tree: data.tree, treeLoading: false, expandedDirs: expanded, workspacePath: data.root })
     } catch {
       set({ treeLoading: false })
+    }
+  },
+
+  openFolder: async (folderPath: string) => {
+    set({ treeLoading: true })
+    try {
+      const r = await fetch('/api/workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: folderPath }),
+      })
+      if (!r.ok) {
+        const err = await r.json()
+        throw new Error(err.error || 'Failed to open folder')
+      }
+      const data = await r.json()
+      set({ workspacePath: data.path, tabs: [], activeTabId: null, expandedDirs: {} })
+      // Refresh the file tree for the new workspace
+      await get().refreshTree()
+      get().toast(`Opened ${data.path}`)
+    } catch (e) {
+      set({ treeLoading: false })
+      get().toast((e as Error).message)
+    }
+  },
+
+  uploadFiles: async (files) => {
+    try {
+      const r = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files }),
+      })
+      if (!r.ok) throw new Error('Upload failed')
+      const data = await r.json()
+      const successes = data.results.filter((r: { success: boolean }) => r.success).length
+      const failures = data.results.filter((r: { success: boolean }) => !r.success).length
+      await get().refreshTree()
+      if (failures > 0) {
+        get().toast(`Uploaded ${successes} files, ${failures} failed`)
+      } else {
+        get().toast(`Uploaded ${successes} files`)
+      }
+    } catch (e) {
+      get().toast((e as Error).message)
+    }
+  },
+
+  createFromTemplate: async (templateId, projectName) => {
+    set({ treeLoading: true })
+    try {
+      const r = await fetch('/api/templates/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templateId, projectName }),
+      })
+      if (!r.ok) {
+        const err = await r.json()
+        throw new Error(err.error || 'Failed to create project')
+      }
+      const data = await r.json()
+      set({ workspacePath: data.path, tabs: [], activeTabId: null, expandedDirs: {} })
+      await get().refreshTree()
+      get().toast(`Created project: ${projectName}`)
+    } catch (e) {
+      set({ treeLoading: false })
+      get().toast((e as Error).message)
     }
   },
 
@@ -400,7 +478,14 @@ export const useStore = create<NewtonState>((set, get) => ({
         savedContent: data.content ?? '',
         language: langFromPath(path),
       }
-      set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
+      // Dedupe inside the updater: a concurrent openFile() for the same path
+      // (e.g. double-click, or two awaited calls) would both pass the
+      // pre-fetch `existing` check and otherwise create duplicate tabs.
+      set((s) => {
+        const dup = s.tabs.find((t) => t.path === path)
+        if (dup) return { activeTabId: dup.id }
+        return { tabs: [...s.tabs, tab], activeTabId: tab.id }
+      })
     } catch {
       get().toast(`Could not open ${path}`)
     }
@@ -467,9 +552,13 @@ export const useStore = create<NewtonState>((set, get) => ({
       await fetch(`/api/file?path=${encodeURIComponent(path)}`, {
         method: 'DELETE',
       })
-      // close tabs under this path
+      // close tabs under this path (exact match or nested under the dir).
+      // A path boundary is required so deleting `src/util` does NOT close
+      // unrelated siblings like `src/utils.ts` / `src/util-tests.ts` — a bare
+      // `startsWith(path)` would match those and silently discard unsaved edits.
+      const prefix = path.endsWith('/') ? path : path + '/'
       set((s) => ({
-        tabs: s.tabs.filter((t) => !t.path.startsWith(path)),
+        tabs: s.tabs.filter((t) => t.path !== path && !t.path.startsWith(prefix)),
       }))
       await get().refreshTree()
       get().toast(`Deleted ${path}`)
@@ -558,7 +647,8 @@ export const useStore = create<NewtonState>((set, get) => ({
       chatBusy: true,
     }))
 
-    abortCtrl = new AbortController()
+    const myCtrl = new AbortController()
+    abortCtrl = myCtrl
     const cfg = providerConfig(get().settings)
 
     try {
@@ -608,7 +698,9 @@ export const useStore = create<NewtonState>((set, get) => ({
         ),
         attachedContext: [],
       }))
-      abortCtrl = null
+      // Only clear the module reference if it still points to *this* controller.
+      // A newer sendMessage() may have already replaced it; clobbering it would make that request unstoppable.
+      if (abortCtrl === myCtrl) abortCtrl = null
     }
   },
 
@@ -916,8 +1008,8 @@ export const useStore = create<NewtonState>((set, get) => ({
       const r = await fetch('/api/git/status')
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const data = (await r.json()) as GitStatusData
-      set({ gitStatus: data, gitBusy: false })
-    } catch {
+      set({ gitStatus: data })
+    } finally {
       set({ gitBusy: false })
     }
   },
@@ -933,8 +1025,9 @@ export const useStore = create<NewtonState>((set, get) => ({
       })
       await get().refreshGit()
     } catch {
-      set({ gitBusy: false })
       get().toast('Stage failed')
+    } finally {
+      set({ gitBusy: false })
     }
   },
 
@@ -949,8 +1042,9 @@ export const useStore = create<NewtonState>((set, get) => ({
       })
       await get().refreshGit()
     } catch {
-      set({ gitBusy: false })
       get().toast('Unstage failed')
+    } finally {
+      set({ gitBusy: false })
     }
   },
 
@@ -980,9 +1074,10 @@ export const useStore = create<NewtonState>((set, get) => ({
       get().toast('Committed ✓')
       return true
     } catch (e) {
-      set({ gitBusy: false })
       get().toast(`Commit failed: ${(e as Error).message}`)
       return false
+    } finally {
+      set({ gitBusy: false })
     }
   },
 
@@ -993,8 +1088,9 @@ export const useStore = create<NewtonState>((set, get) => ({
       await get().refreshGit()
       get().toast('Git repository initialized')
     } catch {
-      set({ gitBusy: false })
       get().toast('Git init failed')
+    } finally {
+      set({ gitBusy: false })
     }
   },
 
@@ -1007,12 +1103,31 @@ export const useStore = create<NewtonState>((set, get) => ({
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const data = await r.json()
       set({ diffText: data.diff || '(no changes)', diffBusy: false })
+      // Fetch side-by-side content for the Monaco DiffEditor (best-effort)
+      try {
+        const cr = await fetch(
+          `/api/git/diff-content?path=${encodeURIComponent(path)}&staged=${staged}`,
+        )
+        if (cr.ok) {
+          const cdata = await cr.json()
+          set({
+            diffContent: {
+              original: cdata.original ?? '',
+              modified: cdata.modified ?? '',
+              language: cdata.language ?? 'plaintext',
+              path: cdata.path ?? path,
+            },
+          })
+        }
+      } catch {
+        /* unified diff still available via diffText */
+      }
     } catch {
       set({ diffText: '(could not load diff)', diffBusy: false })
     }
   },
 
-  clearDiff: () => set({ diffText: null }),
+  clearDiff: () => set({ diffText: null, diffContent: null }),
 
   // ---------- AI SCM ----------
   aiSuggestCommit: async () => {
@@ -1031,7 +1146,6 @@ export const useStore = create<NewtonState>((set, get) => ({
       }
       if (!diff.trim()) {
         get().toast('Stage some changes first')
-        set({ gitBusy: false })
         return null
       }
       const cfg = providerConfig(get().settings)
@@ -1042,12 +1156,12 @@ export const useStore = create<NewtonState>((set, get) => ({
       })
       if (!sr.ok) throw new Error(`HTTP ${sr.status}`)
       const data = await sr.json()
-      set({ gitBusy: false })
       return data.message ?? 'chore: update files'
     } catch (e) {
-      set({ gitBusy: false })
       get().toast(`Commit suggestion failed: ${(e as Error).message}`)
       return null
+    } finally {
+      set({ gitBusy: false })
     }
   },
 
