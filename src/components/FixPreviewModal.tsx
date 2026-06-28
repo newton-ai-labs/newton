@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { Check, X, Sparkles, FileCode, Info } from 'lucide-react'
 
@@ -12,6 +12,7 @@ export default function FixPreviewModal() {
   const dismissFix = useStore((s) => s.dismissFix)
   const fixBusy = useStore((s) => s.fixBusy)
   const [applying, setApplying] = useState(false)
+  const modalRef = useRef<HTMLDivElement>(null)
 
   const diff = useMemo(() => {
     if (!preview) return []
@@ -19,6 +20,38 @@ export default function FixPreviewModal() {
     const after = preview.fixedContent.split('\n')
     return computeLineDiff(before, after)
   }, [preview])
+
+  // Escape key handler + focus trap (must be before early return)
+  useEffect(() => {
+    if (!preview) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        dismissFix()
+        return
+      }
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        )
+        if (focusable.length === 0) return
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    const focusable = modalRef.current?.querySelector<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )
+    focusable?.focus()
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [preview, dismissFix])
 
   if (!preview) return null
 
@@ -37,9 +70,16 @@ export default function FixPreviewModal() {
 
   return (
     <div className="modal-overlay" onClick={dismissFix}>
-      <div className="modal fix-preview-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="fix-preview-title"
+        className="modal fix-preview-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
-          <div className="modal-title">
+          <div className="modal-title" id="fix-preview-title">
             <Sparkles size={16} className="spark" style={{ color: 'var(--blue)' }} />
             <span>{noChanges ? 'No Automatic Fix Available' : 'AI Fix Preview'}</span>
             <span className="fix-preview-file">

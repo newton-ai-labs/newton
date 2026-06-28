@@ -12,6 +12,9 @@ import {
   type Mission,
 } from '../shared/types'
 
+// ---------- constants ----------
+const TOAST_DURATION_MS = 2600
+
 // ---------- types ----------
 export interface EditorTab {
   id: string
@@ -661,7 +664,7 @@ export const useStore = create<NewtonState>((set, get) => ({
           activeFile,
           attachedFiles: attached,
         }),
-        signal: abortCtrl.signal,
+        signal: myCtrl.signal,
       })
       if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`)
 
@@ -915,7 +918,7 @@ export const useStore = create<NewtonState>((set, get) => ({
     set((s) => ({ toasts: [...s.toasts, { id, text }] }))
     setTimeout(() => {
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
-    }, 2600)
+    }, TOAST_DURATION_MS)
   },
 
   // ---------- codebase search / @-mentions ----------

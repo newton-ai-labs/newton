@@ -37,6 +37,14 @@ import {
 } from './mission.js'
 import { safeResolve } from './safePath.js'
 
+// ---------- constants ----------
+const GIT_TIMEOUT_MS = 15000
+const CONTEXT_SLICE_ACTIVE_FILE = 12000
+const CONTEXT_SLICE_ATTACHED = 8000
+const DIFF_SLICE_COMMIT_MSG = 8000
+const DIFF_SLICE_EXPLAIN = 10000
+const DIFF_SLICE_REVIEW = 12000
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const PORT = Number(process.env.NEWTON_PORT) || 8787
@@ -751,7 +759,7 @@ async function buildSystemPrompt(req: ChatRequest): Promise<string> {
   // Inject active file context
   if (req.activeFile?.content) {
     context +=
-      `\n\nThe user currently has \`${req.activeFile.path}\` open:\n\`\`\`\n${req.activeFile.content.slice(0, 12000)}\n\`\`\``
+      `\n\nThe user currently has \`${req.activeFile.path}\` open:\n\`\`\`\n${req.activeFile.content.slice(0, CONTEXT_SLICE_ACTIVE_FILE)}\n\`\`\``
   }
 
   // Inject @-mentioned attached files
@@ -759,7 +767,7 @@ async function buildSystemPrompt(req: ChatRequest): Promise<string> {
     context +=
       '\n\n--- @-MENTIONED FILES (explicitly attached by the user) ---'
     for (const f of req.attachedFiles) {
-      context += `\nFile: \`${f.path}\`\n\`\`\`\n${f.content.slice(0, 8000)}\n\`\`\`\n`
+      context += `\nFile: \`${f.path}\`\n\`\`\`\n${f.content.slice(0, CONTEXT_SLICE_ATTACHED)}\n\`\`\`\n`
     }
     context += '--- END @-MENTIONED FILES ---'
   }
@@ -2124,7 +2132,7 @@ async function git(args: string[]): Promise<string> {
     execFile(
       'git',
       args,
-      { cwd: WORKSPACE, maxBuffer: 5 * 1024 * 1024, timeout: 15000 },
+      { cwd: WORKSPACE, maxBuffer: 5 * 1024 * 1024, timeout: GIT_TIMEOUT_MS },
       (err, stdout) => {
         if (err) resolve('')
         else resolve(stdout.toString().trim())
@@ -2402,7 +2410,7 @@ app.post('/api/git/suggest-commit', async (req, res) => {
       'You are an expert at writing concise conventional-commit messages. ' +
       'Analyze the diff and return ONLY the commit message (no markdown, no code fence). ' +
       'Format: type(scope): short description. Types: feat, fix, refactor, docs, test, chore, perf, style, ci, build.'
-    const user = `Here is the staged diff. Write a single conventional-commit message.\n\n\`\`\`diff\n${diff.slice(0, 8000)}\n\`\`\``
+    const user = `Here is the staged diff. Write a single conventional-commit message.\n\n\`\`\`diff\n${diff.slice(0, DIFF_SLICE_COMMIT_MSG)}\n\`\`\``
 
     const message = await llmComplete(p, system, user)
     res.json({ message: message.trim(), note: 'AI-generated commit message.' })
@@ -2432,7 +2440,7 @@ app.post('/api/git/explain-diff', async (req, res) => {
     const system =
       'You are a senior code reviewer. Explain what the diff does in plain, concise language. ' +
       'Use bullet points. Note the key changes, any potential risks, and the intent behind the change.'
-    const user = `Explain this diff${filePath ? ` for \`${filePath}\`` : ''}:\n\n\`\`\`diff\n${diff.slice(0, 10000)}\n\`\`\``
+    const user = `Explain this diff${filePath ? ` for \`${filePath}\`` : ''}:\n\n\`\`\`diff\n${diff.slice(0, DIFF_SLICE_EXPLAIN)}\n\`\`\``
 
     const explanation = await llmComplete(p, system, user)
     res.json({ explanation: explanation.trim() })
@@ -2469,7 +2477,7 @@ app.post('/api/git/review', async (req, res) => {
       '      "message": "string",\n      "file": "optional string",\n      "line": optional number\n    }\n  ],\n' +
       '  "summary": "string",\n  "score": number\n}'
     const user =
-      `Review this diff${files.length ? ` (files: ${files.join(', ')})` : ''}:\n\n\`\`\`diff\n${diff.slice(0, 12000)}\n\`\`\`\n\n` +
+      `Review this diff${files.length ? ` (files: ${files.join(', ')})` : ''}:\n\n\`\`\`diff\n${diff.slice(0, DIFF_SLICE_REVIEW)}\n\`\`\`\n\n` +
       `Respond as JSON only.`
 
     const raw = await llmComplete(p, system, user)

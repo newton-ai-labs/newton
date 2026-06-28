@@ -19,8 +19,6 @@ import {
   AlertCircle,
   ListTree,
 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { useStore } from './store'
 import ErrorBoundary from './components/ErrorBoundary'
 
@@ -65,18 +63,12 @@ export default function App() {
   const generateTests = useStore((s) => s.generateTests)
   const genTestsBusy = useStore((s) => s.genTestsBusy)
   const gitStatus = useStore((s) => s.gitStatus)
-  const memory = useStore((s) => s.memory)
   const loadMemory = useStore((s) => s.loadMemory)
-  const [welcomeDismissed, setWelcomeDismissed] = useState(false)
 
   useEffect(() => {
     refreshTree()
     loadMemory()
   }, [refreshTree, loadMemory])
-
-  // Show welcome banner once per session when we have a digest and it hasn't been dismissed
-  const welcomeDigest = useStore((s) => s.welcomeDigest)
-  const showWelcome = !welcomeDismissed && !!welcomeDigest && !!memory
 
   // global shortcuts
   useEffect(() => {
@@ -275,58 +267,6 @@ export default function App() {
           <SettingsIcon size={20} />
         </button>
       </div>
-
-      {/* Welcome Back banner */}
-      {showWelcome && (
-        <div
-          style={{
-            padding: '8px 14px',
-            background: 'linear-gradient(90deg, color-mix(in srgb, var(--blue) 18%, transparent), transparent)',
-            borderBottom: '1px solid var(--border)',
-            fontSize: 12,
-            color: 'var(--text)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-          }}
-        >
-          <Sparkles size={13} className="spark" style={{ color: 'var(--blue)' }} />
-          <div style={{ flex: 1, minWidth: 0 }} className="welcome-digest">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                // Render paragraphs inline so the banner stays compact and
-                // preserves the flex-row layout. Without this, <p> would force
-                // a block and visually break the banner.
-                p: ({ children }) => <span style={{ marginRight: 10 }}>{children}</span>,
-                code: ({ children }) => (
-                  <code
-                    style={{
-                      background: 'color-mix(in srgb, var(--blue) 22%, transparent)',
-                      color: 'var(--blue)',
-                      padding: '1px 4px',
-                      borderRadius: 3,
-                      fontSize: 11,
-                    }}
-                  >
-                    {children}
-                  </code>
-                ),
-              }}
-            >
-              {welcomeDigest!}
-            </ReactMarkdown>
-          </div>
-          <button
-            className="mini-btn"
-            style={{ width: 18, height: 18 }}
-            onClick={() => setWelcomeDismissed(true)}
-            title="Dismiss"
-          >
-            <X size={12} />
-          </button>
-        </div>
-      )}
 
       {/* Main */}
       <div className="main-area">

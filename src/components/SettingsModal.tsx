@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { X, Check, KeyRound, Cpu, Zap, Shield, Share2, Sparkles, type LucideIcon } from 'lucide-react'
 import { useStore } from '../store'
 import {
@@ -24,6 +24,41 @@ export default function SettingsModal() {
   const setSettings = useStore((s) => s.setSettings)
   const toast = useStore((s) => s.toast)
   const [saved, setSaved] = useState(false)
+  const modalRef = useRef<HTMLDivElement>(null)
+
+  // Escape key handler + focus trap (must be before early return to follow Rules of Hooks)
+  useEffect(() => {
+    if (!open) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpen(false)
+        return
+      }
+      // Basic focus trap: Tab cycles through focusable elements
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        )
+        if (focusable.length === 0) return
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    // Focus first focusable element on mount
+    const focusable = modalRef.current?.querySelector<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )
+    focusable?.focus()
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [open, setOpen])
 
   if (!open) return null
 
@@ -56,9 +91,16 @@ export default function SettingsModal() {
 
   return (
     <div className="modal-backdrop" onClick={() => setOpen(false)}>
-      <div className="modal settings-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-modal-title"
+        className="modal settings-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
-          <h2>Settings</h2>
+          <h2 id="settings-modal-title">Settings</h2>
           <button className="mini-btn" onClick={() => setOpen(false)}>
             <X size={16} />
           </button>

@@ -186,11 +186,12 @@ export default function MemoryPanel() {
             </Section>
 
             {/* Structure */}
+            {memory.structure && (
             <Section icon={FolderTree} title="Structure" color="var(--green)">
               <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
                 {memory.structure.totalFiles} files · {memory.structure.totalDirs} dirs
               </div>
-              {memory.structure.languages.length > 0 && (
+              {memory.structure.languages?.length > 0 && (
                 <div style={{ marginTop: 6 }}>
                   {memory.structure.languages.slice(0, 6).map((l) => (
                     <div
@@ -230,9 +231,10 @@ export default function MemoryPanel() {
                 </div>
               )}
             </Section>
+            )}
 
             {/* TODOs */}
-            {memory.todos.length > 0 && (
+            {memory.todos?.length > 0 && (
               <Section icon={CheckSquare} title={`TODOs (${memory.todos.length})`} color="var(--yellow)">
                 <div style={{ maxHeight: 160, overflowY: 'auto' }}>
                   {memory.todos.slice(0, 30).map((todo, i) => (

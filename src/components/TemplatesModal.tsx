@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { FolderPlus, FileCode, Server, Globe, FileText, Sparkles } from 'lucide-react'
 import { useStore } from '../store'
 
@@ -29,6 +29,8 @@ export default function TemplatesModal({ open, onClose }: Props) {
   const [creating, setCreating] = useState(false)
   const createFromTemplate = useStore((s) => s.createFromTemplate)
 
+  const modalRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
     if (open) {
       setLoading(true)
@@ -41,6 +43,34 @@ export default function TemplatesModal({ open, onClose }: Props) {
         .catch(() => setLoading(false))
     }
   }, [open])
+
+  // Escape key handler + focus trap
+  useEffect(() => {
+    if (!open) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        )
+        if (focusable.length === 0) return
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [open, onClose])
 
   const handleCreate = async () => {
     if (!selectedId || !projectName.trim()) return
@@ -56,9 +86,17 @@ export default function TemplatesModal({ open, onClose }: Props) {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="templates-modal-title"
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: 520 }}
+      >
         <div className="modal-header">
-          <h2>New Project from Template</h2>
+          <h2 id="templates-modal-title">New Project from Template</h2>
         </div>
         <div className="modal-body">
           {loading ? (

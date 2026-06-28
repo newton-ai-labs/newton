@@ -104,10 +104,13 @@ select {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .main {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   width: 100%;
 }
 
@@ -3439,4 +3442,34 @@ to {
 }
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* ============ RESPONSIVE BREAKPOINTS ============ */
+
+/* Tablet/mobile: make modals and inputs responsive */
+@media (max-width: 768px) {
+  /* Modal responsive */
+  .modal {
+    width: 95vw !important;
+    max-width: 95vw !important;
+    max-height: 90vh;
+  }
+  /* Tab bar scrollable */
+  .tab-bar {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Small mobile: compact inputs */
+@media (max-width: 480px) {
+  .chat-input textarea {
+    font-size: 14px;
+  }
+  .modal-header h2 {
+    font-size: 16px;
+  }
+  .modal-body {
+    padding: 12px;
+  }
 }
