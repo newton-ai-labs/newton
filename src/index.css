@@ -137,7 +137,8 @@ select {
   color: #fff;
   font-size: 18px;
   margin-bottom: 10px;
-  box-shadow: 0 4px 16px rgba(124, 92, 255, 0.4);
+  /* Softer shadow — the original was visually shouting. */
+  box-shadow: 0 2px 8px rgba(124, 92, 255, 0.25);
 }
 .activity-icons {
   display: flex;
@@ -155,24 +156,153 @@ select {
   background: transparent;
   border: none;
   position: relative;
-  transition: all 0.15s;
+  cursor: pointer;
+  /* Scope transitions to the properties we actually animate. */
+  transition: color 0.15s ease, background 0.15s ease, transform 0.08s ease;
 }
 .activity-btn:hover {
   color: var(--text);
   background: var(--panel-2);
 }
+.activity-btn:active {
+  /* Subtle press feedback — feels more tactile than no movement at all. */
+  transform: scale(0.94);
+}
+.activity-btn:focus-visible {
+  /* Keyboard focus ring — accessibility. */
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .activity-btn.active {
   color: var(--text);
+  /* Background tint makes "active" clearly distinct from "hover". */
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .activity-btn.active::before {
   content: '';
   position: absolute;
-  left: -12px;
-  top: 9px;
-  bottom: 9px;
+  /* Inset the indicator inside the button so it can't be clipped by
+     parent overflow / negative-position quirks. */
+  left: 0;
+  top: 8px;
+  bottom: 8px;
   width: 3px;
-  background: var(--accent-grad);
+  background: var(--accent);
   border-radius: 0 3px 3px 0;
+}
+/* Hairline divider above the bottom-pinned global actions group. */
+.activity-bar > .activity-btn:nth-last-of-type(3) {
+  position: relative;
+  margin-top: 4px;
+}
+.activity-bar > .activity-btn:nth-last-of-type(3)::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 6px;
+  right: 6px;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ============ THEME PICKER ============ */
+.theme-picker-trigger {
+  /* Inherits .activity-btn sizing when className includes it. */
+  cursor: pointer;
+}
+.theme-picker-pop {
+  position: fixed;
+  left: 56px; /* just outside the 50px activity bar */
+  bottom: 12px;
+  width: 240px;
+  max-height: 70vh;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-strong, var(--shadow));
+  padding: 8px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  animation: theme-pop-in 0.12s ease-out;
+}
+@keyframes theme-pop-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.theme-picker-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-faint);
+  padding: 4px 6px 2px;
+}
+.theme-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+.theme-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+  width: 100%;
+}
+.theme-picker-item:hover {
+  background: var(--panel-2);
+}
+.theme-picker-item.is-active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.theme-picker-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.theme-picker-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.theme-picker-swatch-accent {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  border-top-left-radius: 7px;
+}
+.theme-picker-meta {
+  flex: 1;
+  min-width: 0;
+}
+.theme-picker-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.theme-picker-mode {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-faint);
+  margin-top: 1px;
 }
 
 /* ============ RESIZE HANDLE ============ */
@@ -350,14 +480,22 @@ select {
   font-size: 12px;
   font-weight: 500;
   line-height: 1.4;
-  transition: all 0.15s;
+  /* Scope to props we actually animate — `all` triggers reflow on unrelated
+     properties and is the biggest source of jank in dense UIs. */
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
   white-space: nowrap;
   cursor: pointer;
 }
 .tab-action-btn:hover:not(:disabled) {
-  background: rgba(124, 92, 255, 0.12);
-  border-color: rgba(124, 92, 255, 0.35);
+  /* Theme-aware accent wash — was hardcoded purple, which looked wrong in
+     light mode where the accent shifts. */
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
   color: var(--accent-2);
+}
+.tab-action-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .tab-action-btn:disabled {
   opacity: 0.5;
@@ -389,7 +527,11 @@ select {
   position: relative;
   white-space: nowrap;
   max-width: 220px;
-  transition: color 0.12s;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .tab:hover {
   color: var(--text);
@@ -421,14 +563,17 @@ select {
   opacity: 0.7;
 }
 .tab .close:hover {
-  background: var(--panel-3);
+  /* Theme-aware tint — was `var(--panel-3)` which is invisible in light mode. */
+  background: color-mix(in srgb, var(--text) 12%, transparent);
   opacity: 1;
 }
 .tab .dirty-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--text-dim);
+  /* Use the warning color so dirty state matches the "● unsaved" indicator
+     in the status bar. More legible than the dim grey it used before. */
+  background: var(--warning);
   flex-shrink: 0;
   display: grid;
   place-items: center;
@@ -466,14 +611,16 @@ select {
 .bc-seg {
   padding: 2px 4px;
   border-radius: 4px;
-  transition: all 0.12s;
+  transition: color 0.12s ease, background 0.12s ease;
 }
 .bc-seg:hover {
   background: var(--panel-2);
-  color: var(--text-dim);
+  color: var(--text);
 }
+/* Current/last segment of the breadcrumb — the active file. Stronger than
+   the rest of the path so it reads as "you're here". */
 .bc-last {
-  color: var(--text-dim);
+  color: var(--text);
   font-weight: 500;
 }
 
@@ -1003,7 +1150,9 @@ select {
 /* ============ STATUS BAR ============ */
 .status-bar {
   height: 26px;
-  background: linear-gradient(90deg, var(--panel-2), var(--panel));
+  /* Flat panel color — the horizontal gradient created a banding artifact
+     at wide widths and didn't add depth. */
+  background: var(--panel);
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -1047,11 +1196,16 @@ select {
   border-radius: 5px;
   display: grid;
   place-items: center;
-  transition: all 0.12s;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
 }
 .status-btn:hover {
   background: var(--panel-3);
   color: var(--text);
+}
+.status-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* ============ TOASTS ============ */

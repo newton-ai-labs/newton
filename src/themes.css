@@ -1,0 +1,171 @@
+/**
+ * Newton theme palettes. Each theme defines the FULL variable surface so
+ * every component re-skins consistently — no leftover dark tokens leaking
+ * into a light theme (or vice versa).
+ *
+ * Themes are selected by setting `data-theme="<id>"` on <html>.
+ * See src/theme.ts for the runtime API and src/themes/registry.ts for
+ * the user-facing metadata.
+ *
+ * Currently shipping two themes (Newton dark + Newton Light). More themes
+ * may live here in the future — keep the structure parallel so adding one
+ * is just copy + retune.
+ */
+
+/* ===========================================================
+   NEWTON — default dark (violet + cyan on deep blue-black)
+   =========================================================== */
+:root[data-theme='newton'] {
+  /* Surfaces */
+  --bg: #0a0b14;
+  --bg-0: #0a0b14;
+  --bg-1: #0d0f1a;
+  --bg-2: #141726;
+  --bg-3: #1b1f30;
+  --panel: #0e1019;
+  --panel-2: #141726;
+  --panel-3: #1b1f30;
+  --panel-bg: #0e1019;
+  --bg-sidebar: #0e1019;
+  --sidebar-bg: #0e1019;
+  --editor-bg: #0a0b14;
+  --surface: #0e1019;
+  --surface-2: #141726;
+  --elevated: #1b1f30;
+  --bg-elev: rgba(255, 255, 255, 0.03);
+
+  /* Text — brighter, slight violet tint */
+  --fg: #f0f2fa;
+  --text: #f0f2fa;
+  --text-main: #f0f2fa;
+  --text-primary: #f0f2fa;
+  --text-secondary: #cfd3e8;
+  --text-muted: #b0b6d4;
+  --muted: #b0b6d4;
+  --fg-muted: #b0b6d4;
+  --text-dim: #b0b6d4;
+  --text-faint: #727890;
+
+  /* Borders */
+  --border: #232842;
+  --border-soft: #1a1d30;
+  --border-strong: #2c3252;
+  --divider: #1a1d30;
+
+  /* Accent + status */
+  --accent: #7c5cff;
+  --accent-2: #00d4ff;
+  --accent-grad: linear-gradient(135deg, #7c5cff 0%, #00d4ff 100%);
+  --accent-rgb: 124, 92, 255;
+  --accent-hover: #6b4ce0;
+  --accent-fg: #ffffff;
+  --primary: #7c5cff;
+  --primary-hover: #6b4ce0;
+  --blue: #60a5fa;
+  --green: #4ade80;
+  --red: #f87171;
+  --yellow: #fbbf24;
+  --orange: #fb923c;
+  --pink: #f472b6;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --error: #f87171;
+  --danger: #f87171;
+  --info: #60a5fa;
+
+  /* Interactive */
+  --hover-bg: #141726;
+  --active-bg: #1b1f30;
+  --selection-bg: rgba(124, 92, 255, 0.22);
+  --focus-ring: rgba(124, 92, 255, 0.45);
+
+  /* Shadow + scrollbar */
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  --shadow-strong: 0 24px 80px rgba(0, 0, 0, 0.75);
+  --scrollbar-thumb: #2c3252;
+  --scrollbar-track: #0e1019;
+
+  color-scheme: dark;
+}
+
+/* ===========================================================
+   NEWTON LIGHT — soft paper whites, same violet accent
+   =========================================================== */
+:root[data-theme='newton-light'] {
+  /* Surfaces — slightly warm off-white */
+  --bg: #fafaf9;
+  --bg-0: #ffffff;
+  --bg-1: #f5f4f0;
+  --bg-2: #ecebe5;
+  --bg-3: #e2e1da;
+  --panel: #f5f4f0;
+  --panel-2: #ecebe5;
+  --panel-3: #e2e1da;
+  --panel-bg: #f5f4f0;
+  --bg-sidebar: #f0efe9;
+  --sidebar-bg: #f0efe9;
+  --editor-bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f0efe9;
+  --elevated: #ffffff;
+  --bg-elev: rgba(15, 23, 42, 0.03);
+
+  /* Text — subtle blue-violet undertone to echo the Newton accent */
+  --fg: #14171c;
+  --text: #14171c;
+  --text-main: #14171c;
+  --text-primary: #14171c;
+  --text-secondary: #3b414b;
+  --text-muted: #5f6675;
+  --muted: #5f6675;
+  --fg-muted: #5f6675;
+  --text-dim: #5f6675;
+  --text-faint: #8b91a0;
+
+  /* Borders */
+  --border: #d6d3ce;
+  --border-soft: #e2e1da;
+  --border-strong: #b9b5ad;
+  --divider: #e2e1da;
+
+  /* Accent — Newton purple stays consistent across light/dark */
+  --accent: #7c3aed;
+  --accent-2: #0891b2;
+  --accent-grad: linear-gradient(135deg, #7c3aed 0%, #0891b2 100%);
+  --accent-rgb: 124, 58, 237;
+  --accent-hover: #6d28d9;
+  --accent-fg: #ffffff;
+  --primary: #7c3aed;
+  --primary-hover: #6d28d9;
+  --blue: #2563eb;
+  --green: #16a34a;
+  --red: #dc2626;
+  --yellow: #ca8a04;
+  --orange: #ea580c;
+  --pink: #db2777;
+  --success: #16a34a;
+  --warning: #d97706;
+  --error: #dc2626;
+  --danger: #dc2626;
+  --info: #2563eb;
+
+  /* Interactive */
+  --hover-bg: #ecebe5;
+  --active-bg: #e2e1da;
+  --selection-bg: rgba(124, 58, 237, 0.16);
+  --focus-ring: rgba(124, 58, 237, 0.4);
+
+  /* Shadow + scrollbar */
+  --shadow: 0 12px 36px rgba(15, 23, 42, 0.08);
+  --shadow-strong: 0 16px 48px rgba(15, 23, 42, 0.16);
+  --scrollbar-thumb: #c3c0b8;
+  --scrollbar-track: #f0efe9;
+
+  color-scheme: light;
+}
+
+/* Reasonable body fallback for elements that read color/background directly. */
+:root[data-theme='newton-light'] body {
+  background: var(--bg, #ffffff);
+  color: var(--fg, #1c1e21);
+}

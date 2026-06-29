@@ -9,15 +9,19 @@
     <script>
       // Apply the persisted theme BEFORE first paint to avoid FOUC.
       // Mirrors src/theme.ts initTheme() but runs synchronously in head.
+      // Keep the valid-IDs list in sync with src/themes/registry.ts.
       (function () {
+        var VALID = ['newton', 'newton-light'];
+        var DEFAULT = 'newton';
         try {
           var t = localStorage.getItem('newton.theme');
-          if (t !== 'light' && t !== 'dark') {
-            t = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-          }
+          // Migrate legacy IDs.
+          if (t === 'light' || t === 'daylight') t = 'newton-light';
+          else if (t === 'dark') t = 'newton';
+          if (VALID.indexOf(t) === -1) t = DEFAULT;
           document.documentElement.setAttribute('data-theme', t);
         } catch (e) {
-          document.documentElement.setAttribute('data-theme', 'dark');
+          document.documentElement.setAttribute('data-theme', DEFAULT);
         }
       })();
     </script>

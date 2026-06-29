@@ -8,6 +8,8 @@ import { fileIcon, fileColor } from './fileIcons'
 import InlineEditWidget from './InlineEditWidget'
 import { registerCopilot } from '../ghostCompletions'
 import { setupCodeLens, type CodeLensAction, type DetectedSymbol } from '../codeLens'
+import { getTheme, subscribeTheme } from '../theme'
+import { registerAllMonacoThemes, monacoThemeName } from '../themes/monacoThemes'
 
 export default function EditorArea() {
   const tabs = useStore((s) => s.tabs)
@@ -164,45 +166,10 @@ function CodeView({
   const lensDisposableRef = useRef<MonacoNs.IDisposable | null>(null)
 
   const beforeMount: BeforeMount = (monaco) => {
-    // Define a custom dark theme once
-    monaco.editor.defineTheme('newton-dark', {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [
-        { token: 'comment', foreground: '5a5f7a', fontStyle: 'italic' },
-        { token: 'keyword', foreground: '7c5cff' },
-        { token: 'string', foreground: '4ade80' },
-        { token: 'number', foreground: 'fbbf24' },
-        { token: 'type', foreground: '00d4ff' },
-        { token: 'function', foreground: '60a5fa' },
-        { token: 'variable', foreground: 'e6e8f0' },
-      ],
-      colors: {
-        'editor.background': '#0d0f1a',
-        'editor.foreground': '#e6e8f0',
-        'editorLineNumber.foreground': '#3a4068',
-        'editorLineNumber.activeForeground': '#9398b8',
-        'editor.selectionBackground': '#7c5cff40',
-        'editor.lineHighlightBackground': '#141726',
-        'editorCursor.foreground': '#00d4ff',
-        'editorIndentGuide.background': '#1a1d30',
-        'editorIndentGuide.activeBackground': '#2a2f48',
-        'editorWidget.background': '#141726',
-        'editorWidget.border': '#232842',
-        'editorSuggestWidget.background': '#141726',
-        'editorSuggestWidget.selectedBackground': '#1b1f30',
-        'input.background': '#0e1019',
-        'input.border': '#232842',
-      },
-    })
-    monaco.editor.defineTheme('newton-light', {
-      base: 'vs',
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': '#ffffff',
-      },
-    })
+    // Register a Monaco theme for every app theme (newton, gray-matter,
+    // midnight, solarized, daylight). The currently-selected theme is set
+    // via the Editor `theme` prop below + a subscribeTheme listener.
+    registerAllMonacoThemes(monaco)
   }
 
   const onMount: OnMount = (ed, monaco) => {
@@ -261,6 +228,11 @@ function CodeView({
     editorRef.current?.updateOptions({ fontSize })
   }, [fontSize])
 
+  // Track the active app theme so Monaco re-skins when the user picks
+  // a different theme via ThemePicker.
+  const [appTheme, setAppTheme] = useState<string>(() => getTheme())
+  useEffect(() => subscribeTheme((t) => setAppTheme(t)), [])
+
   // Listen for goto-line events (from Outline panel, Problems panel, etc.)
   useEffect(() => {
     const onGotoLine = (e: Event) => {
@@ -283,7 +255,7 @@ function CodeView({
         height="100%"
         beforeMount={beforeMount}
         onMount={onMount}
-        theme="newton-dark"
+        theme={monacoThemeName(appTheme)}
         language={tab.language}
         value={tab.content}
         onChange={onChange}

@@ -1,46 +1,49 @@
 /**
  * Newton theme manager.
  *
- * Provides a self-contained light/dark theme toggle that does NOT depend on the
- * Zustand store. The chosen theme is persisted to localStorage and applied to
- * the document root via a `data-theme` attribute. Light-mode CSS variable
- * overrides live in `src/theme-light.css` (imported once at startup).
+ * Manages an arbitrary set of themes from src/themes/registry.ts. The chosen
+ * theme is persisted to localStorage and applied to <html> via a `data-theme`
+ * attribute. Each theme's CSS variable definitions live in src/themes.css.
+ *
+ * Backward compatibility: older versions persisted just 'light' or 'dark';
+ * we migrate those to the new IDs on first read.
  */
 
-export type Theme = 'dark' | 'light'
+import { DEFAULT_THEME_ID, isValidThemeId, THEMES, type ThemeDef } from './themes/registry'
+
+export type Theme = string  // any registered theme ID
 
 const STORAGE_KEY = 'newton.theme'
 
 type Listener = (theme: Theme) => void
 const listeners = new Set<Listener>()
 
-function isTheme(v: unknown): v is Theme {
-  return v === 'dark' || v === 'light'
+/**
+ * Migrate legacy/removed theme IDs. Anything not in the registry falls
+ * through to DEFAULT_THEME_ID via isValidThemeId below.
+ */
+function migrate(raw: string | null): string | null {
+  if (raw === 'light' || raw === 'daylight') return 'newton-light'
+  if (raw === 'dark') return 'newton'
+  return raw
 }
 
-/** Read the persisted theme, falling back to the OS preference, then dark. */
+/** Read the persisted theme, falling back to the default. */
 export function getTheme(): Theme {
   if (typeof localStorage !== 'undefined') {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (isTheme(raw)) return raw
+      const raw = migrate(localStorage.getItem(STORAGE_KEY))
+      if (raw && isValidThemeId(raw)) return raw
     } catch {
       /* localStorage may be unavailable */
     }
   }
-  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-    try {
-      if (window.matchMedia('(prefers-color-scheme: light)').matches) return 'light'
-    } catch {
-      /* matchMedia may throw in some environments */
-    }
-  }
-  return 'dark'
+  return DEFAULT_THEME_ID
 }
 
 /** Apply a theme to <html> and persist it. Notifies subscribers. */
 export function setTheme(theme: Theme): void {
-  const next: Theme = isTheme(theme) ? theme : 'dark'
+  const next: Theme = isValidThemeId(theme) ? theme : DEFAULT_THEME_ID
   if (typeof document !== 'undefined' && document.documentElement) {
     document.documentElement.setAttribute('data-theme', next)
   }
@@ -60,11 +63,16 @@ export function setTheme(theme: Theme): void {
   }
 }
 
-/** Flip between light and dark, returning the new theme. */
-export function toggleTheme(): Theme {
-  const next: Theme = getTheme() === 'dark' ? 'light' : 'dark'
-  setTheme(next)
-  return next
+/**
+ * Cycle to the next theme in registry order — used by the keyboard shortcut.
+ * Returns the new theme.
+ */
+export function cycleTheme(): Theme {
+  const current = getTheme()
+  const idx = THEMES.findIndex((t) => t.id === current)
+  const next = THEMES[(idx + 1) % THEMES.length]
+  setTheme(next.id)
+  return next.id
 }
 
 /** Subscribe to theme changes. Returns an unsubscribe function. */
@@ -83,3 +91,7 @@ export function initTheme(): Theme {
   }
   return theme
 }
+
+/** Re-export registry helpers so consumers don't need two imports. */
+export { THEMES, getThemeDef } from './themes/registry'
+export type { ThemeDef } from './themes/registry'
