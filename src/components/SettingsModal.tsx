@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { X, Check, KeyRound, Cpu, Zap, Shield, Share2, Sparkles, type LucideIcon } from 'lucide-react'
 import { useStore } from '../store'
+import { replayOnboarding } from './constellation/useFirstRun'
 import {
   PROVIDER_REGISTRY,
   type Provider,
@@ -235,6 +236,45 @@ export default function SettingsModal() {
               onBlur={showSaved}
             />
             <p className="hint">Instructions prepended to every assistant message.</p>
+          </section>
+
+          {/* Layout — experimental constellation shell */}
+          <section>
+            <h3>Layout <span style={{ fontSize: 10, color: 'var(--yellow)', marginLeft: 6, padding: '1px 6px', borderRadius: 4, background: 'color-mix(in srgb, var(--yellow) 16%, transparent)', textTransform: 'uppercase', letterSpacing: 0.4 }}>experimental</span></h3>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                className={`layout-pick-btn ${settings.layout === 'classic' ? 'is-active' : ''}`}
+                onClick={() => set({ layout: 'classic' })}
+              >
+                <div className="layout-pick-name">Classic</div>
+                <div className="layout-pick-desc">Activity bar, tabs, panels — the original Newton layout.</div>
+              </button>
+              <button
+                type="button"
+                className={`layout-pick-btn ${settings.layout === 'constellation' ? 'is-active' : ''}`}
+                onClick={() => set({ layout: 'constellation' })}
+              >
+                <div className="layout-pick-name">Constellation</div>
+                <div className="layout-pick-desc">Your codebase as a graph. Click a node to zoom into its file.</div>
+              </button>
+            </div>
+            <p className="hint">
+              Switching applies immediately. Constellation is in active development — some features (editor, prompt, sessions) land in upcoming phases.
+              {' '}
+              <button
+                type="button"
+                onClick={() => {
+                  replayOnboarding()
+                  if (settings.layout !== 'constellation') set({ layout: 'constellation' })
+                  setOpen(false)
+                  toast('Replaying onboarding')
+                }}
+                style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 0, font: 'inherit' }}
+              >
+                Replay onboarding
+              </button>
+            </p>
           </section>
         </div>
 

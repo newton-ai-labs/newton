@@ -2308,7 +2308,11 @@ app.get('/api/git/status', async (_req, res) => {
     }
 
     const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])) || null
-    const porcelain = await git(['status', '--porcelain=v1', '-b', '--renames'])
+    // --untracked-files=all expands untracked directories into their
+    // individual files so the count matches what VS Code / `git status -u`
+    // show. Without this, a newly-created directory collapses to a single
+    // entry regardless of how many files are inside it.
+    const porcelain = await git(['status', '--porcelain=v1', '-b', '--renames', '--untracked-files=all'])
 
     // Parse "## main...origin/main [ahead 2]" header
     let ahead = 0
@@ -2467,6 +2471,36 @@ app.get('/api/git/log', async (req, res) => {
       'log',
       `-${limit}`,
       `--pretty=format:%H\x1f%h\x1f%s\x1f%an\x1f%ar`,
+    ])
+    if (!raw) return res.json({ commits: [] })
+    const commits = raw.split('\n').map((line) => {
+      const [hash, short, message, author, date] = line.split('\x1f')
+      return { hash, short, message, author, date }
+    })
+    res.json({ commits })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/**
+ * Recent commits touching a specific file. Used by the constellation's
+ * Node Details drawer. Path is validated via safeJoin to make sure it's
+ * inside the workspace before we pass it to git.
+ */
+app.get('/api/git/file-log', async (req, res) => {
+  try {
+    const rel = String(req.query.path ?? '').trim()
+    if (!rel) return res.status(400).json({ error: 'path required' })
+    // Validate path stays within workspace (throws if it escapes)
+    safeJoin(rel)
+    const limit = Math.min(Number(req.query.limit) || 5, 50)
+    const raw = await git([
+      'log',
+      `-${limit}`,
+      `--pretty=format:%H\x1f%h\x1f%s\x1f%an\x1f%ar`,
+      '--',
+      rel,
     ])
     if (!raw) return res.json({ commits: [] })
     const commits = raw.split('\n').map((line) => {

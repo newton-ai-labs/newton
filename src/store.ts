@@ -1515,8 +1515,29 @@ export const useStore = create<NewtonState>((set, get) => ({
         body: JSON.stringify({ goal: trimmed, contextFiles, provider: cfg }),
       })
       if (!r.ok) {
-        // Try to surface the server's actual error reason instead of a bare HTTP code.
-        const reason = await r.json().then((j: any) => j?.error).catch(() => null)
+        // Server-side validator/planner failures return 502 with a body of
+        // { error, missionId }. The server already persisted the mission
+        // with status='failed' and summary=<reason> — fetch it and add to
+        // the store so the SessionPanel can show the failure durably,
+        // instead of relying on the auto-fading toast as the only signal.
+        const body = await r.json().catch(() => ({} as any))
+        const reason: string | undefined = body?.error
+        const failedId: string | undefined = body?.missionId
+        if (failedId) {
+          try {
+            const mr = await fetch(`/api/missions/${failedId}`)
+            if (mr.ok) {
+              const failed = (await mr.json()) as Mission
+              set((s) => ({
+                missions: [failed, ...s.missions.filter((m) => m.id !== failed.id)],
+                activeMission: failed,
+                missionBusy: false,
+              }))
+              // Don't toast — the session card now carries the full error.
+              return failed
+            }
+          } catch { /* fall through to generic throw */ }
+        }
         throw new Error(reason ? `HTTP ${r.status}: ${reason}` : `HTTP ${r.status}`)
       }
       const mission = (await r.json()) as Mission

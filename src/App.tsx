@@ -15,7 +15,6 @@ import {
   Network,
   Brain,
   Rocket,
-  X,
   AlertCircle,
   ListTree,
 } from 'lucide-react'
@@ -28,6 +27,7 @@ import EditorArea from './components/EditorArea'
 import ChatPanel from './components/ChatPanel'
 import CommandPalette from './components/CommandPalette'
 import ThemePicker from './components/ThemePicker'
+import ConstellationLayout from './components/constellation/ConstellationLayout'
 
 // Lazy-loaded components for code splitting
 const SettingsModal = lazy(() => import('./components/SettingsModal'))
@@ -124,6 +124,20 @@ export default function App() {
   ])
 
   const dirty = activeTab && activeTab.content !== activeTab.savedContent
+
+  // Constellation layout opt-in. Renders the new shell entirely outside the
+  // classic layout below — they don't share chrome. Settings modal still
+  // works (mounted by the constellation shell too).
+  if (settings.layout === 'constellation') {
+    return (
+      <ErrorBoundary>
+        <ConstellationLayout />
+        <Suspense fallback={null}>
+          <SettingsModal />
+        </Suspense>
+      </ErrorBoundary>
+    )
+  }
 
   return (
     <ErrorBoundary>

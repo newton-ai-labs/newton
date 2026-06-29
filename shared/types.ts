@@ -312,10 +312,18 @@ export interface Settings {
   theme: 'newton-dark' | 'newton-light'
   fontSize: number
   systemPrompt: string
+  /**
+   * App shell layout.
+   *   - 'classic'       — the original VS-Code-style layout (activity bar, tabs, panels)
+   *   - 'constellation' — codebase-as-graph view; click a node to zoom into Monaco
+   *
+   * Defaults to 'classic' until the constellation shell is fully featured.
+   */
+  layout: 'classic' | 'constellation'
 }
 
 /** Current persisted-settings schema version. Bump when shape changes. */
-export const SETTINGS_SCHEMA_VERSION = 2
+export const SETTINGS_SCHEMA_VERSION = 3
 
 /** Build default provider configs from the registry (first model as default). */
 function buildDefaultProviderConfigs(): Partial<Record<Provider, PerProviderSettings>> {
@@ -339,19 +347,20 @@ export const DEFAULT_SETTINGS: Settings = {
   fontSize: 13,
   systemPrompt:
     'You are Newton, a friendly, expert AI pair programmer embedded in a code editor. Be concise and practical. When sharing code, use fenced code blocks with the language tag. If the user shares a file, use it as context.',
+  layout: 'classic',
 }
 
 /**
  * Migrate legacy settings (pre-registry) to the new generic format.
  * Legacy shape had openaiModel/openaiApiKey/etc flat fields.
  */
-export function migrateSettings(raw: Record<string, any>): Settings {
+export function migrateSettings(raw: Record<string, unknown>): Settings {
   const rawVersion = typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 1
 
   // If already in new format, deep-merge each provider config with defaults
   if (raw.providerConfigs && typeof raw.providerConfigs === 'object') {
     const mergedConfigs = { ...DEFAULT_SETTINGS.providerConfigs }
-    for (const [providerId, userCfgRaw] of Object.entries(raw.providerConfigs)) {
+    for (const [providerId, userCfgRaw] of Object.entries(raw.providerConfigs as Record<string, unknown>)) {
       const def = mergedConfigs[providerId as Provider]
       const userCfg = (userCfgRaw ?? {}) as Partial<PerProviderSettings>
       mergedConfigs[providerId as Provider] = {
@@ -361,8 +370,8 @@ export function migrateSettings(raw: Record<string, any>): Settings {
       }
     }
     // Validate provider against the registry
-    const knownIds = new Set(PROVIDER_REGISTRY.map((p) => p.id))
-    const provider: Provider = knownIds.has(raw.provider) ? (raw.provider as Provider) : 'demo'
+    const knownIds = new Set<string>(PROVIDER_REGISTRY.map((p) => p.id))
+    const provider: Provider = typeof raw.provider === 'string' && knownIds.has(raw.provider) ? (raw.provider as Provider) : 'demo'
     return {
       ...DEFAULT_SETTINGS,
       schemaVersion: SETTINGS_SCHEMA_VERSION,
@@ -371,47 +380,50 @@ export function migrateSettings(raw: Record<string, any>): Settings {
       theme: raw.theme === 'newton-light' ? 'newton-light' : 'newton-dark',
       fontSize: typeof raw.fontSize === 'number' && raw.fontSize >= 8 && raw.fontSize <= 32 ? raw.fontSize : 13,
       systemPrompt: typeof raw.systemPrompt === 'string' ? raw.systemPrompt : DEFAULT_SETTINGS.systemPrompt,
+      layout: raw.layout === 'constellation' ? 'constellation' : 'classic',
     }
   }
 
   // Legacy (v1) migration — flat openaiModel/openaiApiKey/etc fields
+  const legacy = raw as Record<string, string | undefined>
   const configs = buildDefaultProviderConfigs()
-  if (raw.openaiModel || raw.openaiApiKey || raw.openaiBaseUrl) {
+  if (legacy.openaiModel || legacy.openaiApiKey || legacy.openaiBaseUrl) {
     configs.openai = {
       ...(configs.openai ?? {}),
-      model: raw.openaiModel || 'gpt-4o-mini',
-      apiKey: raw.openaiApiKey || '',
-      baseUrl: raw.openaiBaseUrl || 'https://api.openai.com/v1',
+      model: legacy.openaiModel || 'gpt-4o-mini',
+      apiKey: legacy.openaiApiKey || '',
+      baseUrl: legacy.openaiBaseUrl || 'https://api.openai.com/v1',
     }
   }
-  if (raw.anthropicModel || raw.anthropicApiKey) {
+  if (legacy.anthropicModel || legacy.anthropicApiKey) {
     configs.anthropic = {
       ...(configs.anthropic ?? {}),
-      model: raw.anthropicModel || 'claude-3-5-sonnet-20241022',
-      apiKey: raw.anthropicApiKey || '',
+      model: legacy.anthropicModel || 'claude-3-5-sonnet-20241022',
+      apiKey: legacy.anthropicApiKey || '',
       baseUrl: 'https://api.anthropic.com',
     }
   }
-  if (raw.ollamaModel || raw.ollamaBaseUrl) {
+  if (legacy.ollamaModel || legacy.ollamaBaseUrl) {
     configs.ollama = {
       ...(configs.ollama ?? {}),
-      model: raw.ollamaModel || 'llama3.1',
+      model: legacy.ollamaModel || 'llama3.1',
       apiKey: '',
-      baseUrl: raw.ollamaBaseUrl || 'http://localhost:11434',
+      baseUrl: legacy.ollamaBaseUrl || 'http://localhost:11434',
     }
   }
   void rawVersion // version tracked above; reserved for future versioned migrations
   // Validate provider against the registry — fall back to demo on unknown values
-  const knownProviderIds = new Set(PROVIDER_REGISTRY.map((p) => p.id))
-  const provider: Provider = knownProviderIds.has(raw.provider) ? (raw.provider as Provider) : 'demo'
+  const knownProviderIds = new Set<string>(PROVIDER_REGISTRY.map((p) => p.id))
+  const provider: Provider = typeof raw.provider === 'string' && knownProviderIds.has(raw.provider) ? (raw.provider as Provider) : 'demo'
   return {
     ...DEFAULT_SETTINGS,
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     provider,
     providerConfigs: configs,
-    theme: raw.theme || 'newton-dark',
-    fontSize: raw.fontSize || 13,
-    systemPrompt: raw.systemPrompt || DEFAULT_SETTINGS.systemPrompt,
+    theme: typeof raw.theme === 'string' ? (raw.theme as Settings['theme']) : 'newton-dark',
+    fontSize: typeof raw.fontSize === 'number' ? raw.fontSize : 13,
+    systemPrompt: typeof raw.systemPrompt === 'string' ? raw.systemPrompt : DEFAULT_SETTINGS.systemPrompt,
+    layout: raw.layout === 'constellation' ? 'constellation' : 'classic',
   }
 }
 
