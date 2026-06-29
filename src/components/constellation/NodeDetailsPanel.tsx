@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import {
   X, FileCode, GitBranch, AlertCircle, FlaskConical, Plug, Network,
-  ArrowDownToLine, ArrowUpFromLine, ExternalLink,
+  ArrowDownToLine, ArrowUpFromLine, ExternalLink, Sparkles, Rocket,
+  Wand2, BookOpen, Gauge, ShieldCheck, Wrench, Eye, Loader2,
 } from 'lucide-react'
 import { useGraph } from './useGraph'
 import { useCodebaseHealth } from './useCodebaseHealth'
 import { subsystemFor } from './subsystems'
+import { useStore } from '../../store'
+import { providerConfig } from '../../store'
 
 /**
  * Right-side detail drawer for a focused node.
@@ -39,15 +42,43 @@ interface Commit {
   date: string
 }
 
+interface Suggestion {
+  title: string
+  reason: string
+  kind: 'test' | 'refactor' | 'docs' | 'perf' | 'security' | 'cleanup' | 'review'
+}
+
+interface FileStats {
+  totalCommits: number
+  last7Days: number
+  last30Days: number
+  last90Days: number
+  daysSinceLastTouch: number | null
+  distinctAuthors: number
+}
+
+// Server now owns the real cache (sha1 of path + content + model, persisted
+// to .newton-cache/suggestions.json). The client just always fetches and
+// trusts the server's `cached: true|false` response — no stale-cache bugs
+// when files change between opens.
+
 export default function NodeDetailsPanel({ nodeId, onClose, onOpenInEditor }: Props) {
   const { graph } = useGraph()
   const { byPath } = useCodebaseHealth()
+  const settings = useStore((s) => s.settings)
+  const startMission = useStore((s) => s.startMission)
+  const executeMission = useStore((s) => s.executeMission)
   const [commits, setCommits] = useState<Commit[]>([])
   const [commitsLoading, setCommitsLoading] = useState(false)
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+  const [suggestionsError, setSuggestionsError] = useState<string | null>(null)
+  const [suggestionsCached, setSuggestionsCached] = useState(false)
+  const [stats, setStats] = useState<FileStats | null>(null)
 
-  // Fetch commits whenever the focused node changes.
+  // Fetch commits + per-file stats whenever the focused node changes.
   useEffect(() => {
-    if (!nodeId) { setCommits([]); return }
+    if (!nodeId) { setCommits([]); setStats(null); return }
     let cancelled = false
     setCommitsLoading(true)
     fetch(`/api/git/file-log?path=${encodeURIComponent(nodeId)}&limit=5`)
@@ -55,8 +86,53 @@ export default function NodeDetailsPanel({ nodeId, onClose, onOpenInEditor }: Pr
       .then((d: { commits: Commit[] }) => { if (!cancelled) setCommits(d.commits ?? []) })
       .catch(() => { if (!cancelled) setCommits([]) })
       .finally(() => { if (!cancelled) setCommitsLoading(false) })
+    // Stats fetch is silent — null state hides the section if unavailable.
+    fetch(`/api/git/file-stats?path=${encodeURIComponent(nodeId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: FileStats | null) => { if (!cancelled) setStats(d) })
+      .catch(() => { if (!cancelled) setStats(null) })
     return () => { cancelled = true }
   }, [nodeId])
+
+  // Fetch suggestions whenever the focused node changes. Server has its
+  // own content-hash cache, so this is effectively free after the first
+  // request for a given (file content + model). We always fetch so we
+  // never serve stale results after a file changes.
+  useEffect(() => {
+    if (!nodeId) { setSuggestions([]); setSuggestionsError(null); return }
+    let cancelled = false
+    setSuggestionsLoading(true)
+    setSuggestionsError(null)
+    fetch('/api/node/suggestions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: nodeId, provider: providerConfig(settings) }),
+    })
+      .then(async (r) => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({ error: `HTTP ${r.status}` }))
+          throw new Error(body?.error ?? `HTTP ${r.status}`)
+        }
+        return r.json() as Promise<{ suggestions: Suggestion[]; cached?: boolean }>
+      })
+      .then((d) => {
+        if (cancelled) return
+        setSuggestions(d.suggestions ?? [])
+        setSuggestionsCached(!!d.cached)
+      })
+      .catch((e) => { if (!cancelled) setSuggestionsError((e as Error).message) })
+      .finally(() => { if (!cancelled) setSuggestionsLoading(false) })
+    return () => { cancelled = true }
+  }, [nodeId, settings])
+
+  const runSuggestion = async (s: Suggestion) => {
+    if (!nodeId) return
+    const m = await startMission(s.title, [nodeId])
+    if (m && m.status !== 'failed') {
+      executeMission(m.id).catch(() => { /* surfaced via session panel */ })
+      onClose()  // dismiss the drawer so the user can watch the mission card
+    }
+  }
 
   // Esc closes (in addition to whatever the parent wires up). Scoped so
   // it doesn't fight the editor or palette keybindings.
@@ -142,6 +218,99 @@ export default function NodeDetailsPanel({ nodeId, onClose, onOpenInEditor }: Pr
           <ImpactRow icon={Network} label="Total blast radius" value={inbound.length + directDeps} color="var(--text-dim)" />
         </Section>
 
+        {/* Quality & Risk — composite signals from graph + health + git
+            stats. Heuristic, not authoritative, but actionable. */}
+        {(() => {
+          const r = computeRisk({
+            loc: node.lineCount ?? 0,
+            callers: inbound.length,
+            deps: directDeps,
+            errors: health?.errors ?? 0,
+            warnings: health?.warnings ?? 0,
+            dirty: !!health?.gitStatus,
+            stats,
+          })
+          return (
+            <Section title="Quality & risk">
+              <div style={riskRowStyle}>
+                <span style={dlLabelStyle}>Risk score</span>
+                <div style={{ flex: 1, marginLeft: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{
+                    flex: 1, height: 6, borderRadius: 4, background: 'var(--panel-2)',
+                    overflow: 'hidden', position: 'relative',
+                  }}>
+                    <div style={{
+                      width: `${r.score}%`, height: '100%', borderRadius: 4,
+                      background: r.color, transition: 'width 0.3s ease, background 0.3s ease',
+                    }} />
+                  </div>
+                  <span style={{ fontSize: 13, fontWeight: 500, color: r.color, minWidth: 38, textAlign: 'right' }}>
+                    {r.score}/100
+                  </span>
+                </div>
+              </div>
+              <DLRow label="Stance" value={r.label} />
+              {stats && (
+                <>
+                  <DLRow label="Change frequency" value={freqLabel(stats.last30Days)} />
+                  <DLRow label="Commits (30d)" value={String(stats.last30Days)} />
+                  <DLRow label="Total commits" value={String(stats.totalCommits)} />
+                  {stats.daysSinceLastTouch !== null && (
+                    <DLRow label="Last touched" value={daysAgo(stats.daysSinceLastTouch)} />
+                  )}
+                  <DLRow label="Authors" value={String(stats.distinctAuthors)} />
+                </>
+              )}
+            </Section>
+          )
+        })()}
+
+        {/* AI-suggested actions for this file. Click a row to run it as a
+            mission (focuses this file as context, auto-executes). The
+            "cached" badge means the server hit its disk cache (no LLM
+            call billed); absent means a fresh LLM call just ran. */}
+        <Section
+          title="Suggested actions"
+          badge={
+            !suggestionsLoading && suggestions.length > 0 && suggestionsCached
+              ? <span style={cachedBadgeStyle} title="Served from the server-side cache — no LLM call this time">✓ cached</span>
+              : null
+          }
+        >
+          {suggestionsLoading && (
+            <div style={loadingStyle}>
+              <Loader2 size={12} className="cn-spin" style={{ verticalAlign: '-2px', marginRight: 6 }} />
+              Analyzing {nodeId.split('/').pop()}…
+            </div>
+          )}
+          {!suggestionsLoading && suggestionsError && (
+            <div style={emptyStyle}>{suggestionsError}</div>
+          )}
+          {!suggestionsLoading && !suggestionsError && suggestions.length === 0 && (
+            <div style={emptyStyle}>No suggestions.</div>
+          )}
+          {!suggestionsLoading && suggestions.map((s, i) => {
+            const Icon = iconForKind(s.kind)
+            const color = colorForKind(s.kind)
+            return (
+              <button
+                key={i}
+                type="button"
+                className="cn-suggestion"
+                onClick={() => void runSuggestion(s)}
+                title={`Run "${s.title}" as a mission`}
+              >
+                <Icon size={13} style={{ color, flexShrink: 0, marginTop: 2 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={suggestionTitleStyle}>{s.title}</div>
+                  {s.reason && <div style={suggestionReasonStyle}>{s.reason}</div>}
+                </div>
+                <Rocket size={12} className="cn-suggestion-go" />
+              </button>
+            )
+          })}
+        </Section>
+
         {/* Recent commits */}
         <Section title="Recent commits">
           {commitsLoading && (
@@ -181,10 +350,13 @@ export default function NodeDetailsPanel({ nodeId, onClose, onOpenInEditor }: Pr
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, badge, children }: { title: string; badge?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section style={sectionStyle}>
-      <h4 style={sectionTitleStyle}>{title}</h4>
+      <h4 style={sectionTitleStyle}>
+        <span>{title}</span>
+        {badge && <span style={{ marginLeft: 'auto' }}>{badge}</span>}
+      </h4>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>{children}</div>
     </section>
   )
@@ -216,6 +388,77 @@ function ImpactRow({
       <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>{value}</span>
     </div>
   )
+}
+
+/**
+ * Composite "risk score" out of 100. Heuristic blend of four signals:
+ *   - File size           (max 25 pts)   — larger files are harder to change safely
+ *   - Blast radius        (max 30 pts)   — number of callers; widely-imported files
+ *                                          carry more risk per edit
+ *   - Health flags        (max 25 pts)   — open errors / warnings / unstaged changes
+ *   - Change frequency    (max 20 pts)   — hotspots are riskier (Pareto-like)
+ *
+ * Not authoritative — it's a directional tip, not a verdict. The label gives
+ * the user a feel for what the score means without staring at the math.
+ */
+function computeRisk(input: {
+  loc: number; callers: number; deps: number
+  errors: number; warnings: number; dirty: boolean
+  stats: FileStats | null
+}): { score: number; label: string; color: string } {
+  const sizePts    = Math.min(25, (input.loc / 500) * 25)
+  const blastPts   = Math.min(30, (input.callers / 10) * 30)
+  const healthPts  = Math.min(25, input.errors * 8 + input.warnings * 2 + (input.dirty ? 5 : 0))
+  const freqPts    = Math.min(20, ((input.stats?.last30Days ?? 0) / 10) * 20)
+  const score = Math.round(sizePts + blastPts + healthPts + freqPts)
+  let label: string
+  let color: string
+  if (score < 25)       { label = 'Quiet';     color = 'var(--green)' }
+  else if (score < 50)  { label = 'Active';    color = 'var(--blue)' }
+  else if (score < 75)  { label = 'Hot spot';  color = 'var(--yellow)' }
+  else                  { label = 'High risk'; color = 'var(--red)' }
+  return { score, label, color }
+}
+
+function freqLabel(commits30d: number): string {
+  if (commits30d === 0) return 'Untouched (30d)'
+  if (commits30d <= 2)  return 'Low'
+  if (commits30d <= 6)  return 'Moderate'
+  if (commits30d <= 15) return 'High'
+  return 'Very high'
+}
+
+function daysAgo(days: number): string {
+  if (days === 0) return 'today'
+  if (days === 1) return 'yesterday'
+  if (days < 30)  return `${days}d ago`
+  if (days < 365) return `${Math.round(days / 30)}mo ago`
+  return `${Math.round(days / 365)}y ago`
+}
+
+function iconForKind(k: Suggestion['kind']) {
+  switch (k) {
+    case 'test':     return FlaskConical
+    case 'refactor': return Wand2
+    case 'docs':     return BookOpen
+    case 'perf':     return Gauge
+    case 'security': return ShieldCheck
+    case 'cleanup':  return Wrench
+    case 'review':
+    default:         return Eye
+  }
+}
+function colorForKind(k: Suggestion['kind']): string {
+  switch (k) {
+    case 'test':     return 'var(--green)'
+    case 'refactor': return 'var(--accent)'
+    case 'docs':     return 'var(--blue)'
+    case 'perf':     return 'var(--yellow)'
+    case 'security': return 'var(--red)'
+    case 'cleanup':  return 'var(--text-dim)'
+    case 'review':
+    default:         return 'var(--accent-2)'
+  }
 }
 
 function languageFromExt(p: string): string {
@@ -304,6 +547,22 @@ const sectionTitleStyle: React.CSSProperties = {
   color: 'var(--text-faint)',
   margin: 0,
   fontWeight: 600,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+}
+const cachedBadgeStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 3,
+  fontSize: 9.5,
+  fontWeight: 500,
+  letterSpacing: 0.3,
+  padding: '1px 6px',
+  borderRadius: 999,
+  background: 'color-mix(in srgb, var(--green) 14%, transparent)',
+  color: 'var(--green)',
+  textTransform: 'none',
 }
 const dlRowStyle: React.CSSProperties = {
   display: 'flex',
@@ -368,6 +627,24 @@ const loadingStyle: React.CSSProperties = {
 }
 const emptyStyle: React.CSSProperties = {
   fontSize: 11.5, color: 'var(--text-faint)', padding: '8px 0',
+}
+const suggestionTitleStyle: React.CSSProperties = {
+  fontSize: 12.5,
+  color: 'var(--text)',
+  lineHeight: 1.35,
+  fontWeight: 500,
+}
+const suggestionReasonStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: 'var(--text-dim)',
+  lineHeight: 1.4,
+  marginTop: 2,
+}
+const riskRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  padding: '4px 0',
+  borderBottom: '0.5px solid var(--border-soft)',
 }
 const footerStyle: React.CSSProperties = {
   padding: 12,

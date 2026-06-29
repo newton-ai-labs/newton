@@ -43,3 +43,4 @@ playwright-fixtures/
 localStorage-dump.json
 .newton-index.json
 .newton/
+.newton-cache/

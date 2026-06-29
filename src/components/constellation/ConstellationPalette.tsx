@@ -7,10 +7,15 @@ import {
   Layers,
   Terminal,
   Rocket,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+  CircleDot,
 } from 'lucide-react'
 import { useStore } from '../../store'
 import { useGraph } from './useGraph'
 import { THEMES, getTheme, setTheme } from '../../theme'
+import type { Mission } from '../../../shared/types'
 
 /**
  * Constellation-native ⌘K palette. Replaces the activity-bar discovery
@@ -25,7 +30,7 @@ import { THEMES, getTheme, setTheme } from '../../theme'
  * ConstellationLayout listens for — keeps palette/layout decoupled.
  */
 
-type RowKind = 'command' | 'file'
+type RowKind = 'command' | 'file' | 'session'
 
 interface Row {
   id: string
@@ -45,6 +50,8 @@ export default function ConstellationPalette() {
   const setTerminalOpen = useStore((s) => s.setTerminalOpen)
   const setSettings = useStore((s) => s.setSettings)
   const settings = useStore((s) => s.settings)
+  const missions = useStore((s) => s.missions)
+  const setActiveMission = useStore((s) => s.setActiveMission)
   const { graph } = useGraph()
 
   const [q, setQ] = useState('')
@@ -127,16 +134,44 @@ export default function ConstellationPalette() {
     }))
   }, [graph])
 
+  // Past missions become navigable: pick one → it's set as active (so the
+  // SessionPanel re-shows it) and we fly to its first edited file, if any.
+  const sessionRows: Omit<Row, 'score'>[] = useMemo(() => {
+    return [...missions]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 50)
+      .map((m) => ({
+        id: `session:${m.id}`,
+        kind: 'session' as const,
+        label: m.goal,
+        hint: `${missionStatusLabel(m)} · ${missionAge(m.updatedAt)}`,
+        icon: missionIcon(m),
+        run: () => {
+          setActiveMission(m)
+          setOpen(false)
+          const primary = primaryFile(m)
+          if (primary) window.dispatchEvent(new CustomEvent('newton:focus-node', { detail: { nodeId: primary } }))
+        },
+      }))
+  }, [missions, setActiveMission, setOpen])
+
   const rows = useMemo<Row[]>(() => {
     const trimmed = q.trim()
     const cmdMode = trimmed.startsWith('>')
     const fileMode = trimmed.startsWith('@')
-    const queryText = (cmdMode || fileMode) ? trimmed.slice(1).trim() : trimmed
+    const sessionMode = trimmed.startsWith('~')
+    const queryText = (cmdMode || fileMode || sessionMode) ? trimmed.slice(1).trim() : trimmed
 
     const candidates: Omit<Row, 'score'>[] = []
-    if (fileMode) candidates.push(...fileRows)
+    if (sessionMode) candidates.push(...sessionRows)
+    else if (fileMode) candidates.push(...fileRows)
     else if (cmdMode) candidates.push(...commands)
-    else candidates.push(...commands, ...fileRows)
+    else {
+      // Default mixed view: sessions on top (most-recent first by insertion
+      // order from sessionRows), then commands, then files. The sort
+      // tiebreak below keeps that ordering when scores are equal.
+      candidates.push(...sessionRows, ...commands, ...fileRows)
+    }
 
     const lower = queryText.toLowerCase()
     const scored: Row[] = []
@@ -144,14 +179,14 @@ export default function ConstellationPalette() {
       const score = matchScore(c, lower)
       if (score > -1) scored.push({ ...c, score })
     }
+    const kindRank: Record<RowKind, number> = { session: 0, command: 1, file: 2 }
     scored.sort((a, b) => {
-      // Commands rank above files at equal score so they're discoverable.
       if (b.score !== a.score) return b.score - a.score
-      if (a.kind !== b.kind) return a.kind === 'command' ? -1 : 1
+      if (a.kind !== b.kind) return kindRank[a.kind] - kindRank[b.kind]
       return a.label.localeCompare(b.label)
     })
     return scored.slice(0, 60)
-  }, [q, commands, fileRows])
+  }, [q, commands, fileRows, sessionRows])
 
   // Clamp selection when the result set shrinks.
   useEffect(() => { setSel((s) => Math.min(s, Math.max(0, rows.length - 1))) }, [rows.length])
@@ -209,7 +244,7 @@ export default function ConstellationPalette() {
                 onMouseEnter={() => setSel(i)}
                 onClick={() => r.run()}
               >
-                <Icon size={14} style={{ color: r.kind === 'file' ? 'var(--accent-2)' : 'var(--text-dim)', flexShrink: 0 }} />
+                <Icon size={14} style={{ color: iconTint(r.kind), flexShrink: 0 }} />
                 <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 6, overflow: 'hidden' }}>
                   <span style={{ fontSize: 13, color: 'var(--text)', whiteSpace: 'nowrap' }}>{r.label}</span>
                   {r.hint && (
@@ -231,7 +266,9 @@ export default function ConstellationPalette() {
         <div style={footerStyle}>
           <span><kbd className="cn-kbd">↑↓</kbd> navigate</span>
           <span><kbd className="cn-kbd">↵</kbd> open</span>
-          <span><kbd className="cn-kbd">&gt;</kbd> commands · <kbd className="cn-kbd">@</kbd> files</span>
+          <span>
+            <kbd className="cn-kbd">&gt;</kbd> commands · <kbd className="cn-kbd">@</kbd> files · <kbd className="cn-kbd">~</kbd> sessions
+          </span>
           <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--accent)' }}>
             <Rocket size={11} />
             {rows.length} {rows.length === 1 ? 'result' : 'results'}
@@ -240,6 +277,52 @@ export default function ConstellationPalette() {
       </div>
     </div>
   )
+}
+
+function iconTint(kind: RowKind): string {
+  switch (kind) {
+    case 'session': return 'var(--accent)'
+    case 'file':    return 'var(--accent-2)'
+    case 'command':
+    default:        return 'var(--text-dim)'
+  }
+}
+
+function missionIcon(m: Mission) {
+  if (m.status === 'running' || m.status === 'planning') return Loader2
+  if (m.status === 'done') return CheckCircle2
+  if (m.status === 'failed' || m.status === 'cancelled') return AlertCircle
+  return CircleDot
+}
+
+function missionStatusLabel(m: Mission): string {
+  switch (m.status) {
+    case 'planning': return 'planning'
+    case 'running':  return 'running'
+    case 'paused':   return 'paused'
+    case 'done':     return 'done'
+    case 'failed':   return 'failed'
+    case 'cancelled':return 'cancelled'
+    default:         return m.status
+  }
+}
+
+function missionAge(ts: number): string {
+  const sec = Math.max(0, Math.floor((Date.now() - ts) / 1000))
+  if (sec < 60)       return `${sec}s ago`
+  if (sec < 3600)     return `${Math.floor(sec / 60)}m ago`
+  if (sec < 86_400)   return `${Math.floor(sec / 3600)}h ago`
+  return `${Math.floor(sec / 86_400)}d ago`
+}
+
+/** Best-guess "primary" file for a mission: the first edited step's path,
+    failing that the first attached context file. Used so picking a session
+    in the palette flies the canvas to a useful place. */
+function primaryFile(m: Mission): string | null {
+  for (const s of m.steps) {
+    if (s.path && (s.action === 'edit' || s.action === 'patch' || s.action === 'create')) return s.path
+  }
+  return m.contextFiles?.[0] ?? null
 }
 
 /**

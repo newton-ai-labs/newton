@@ -4,6 +4,7 @@ import cors from 'cors'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import rateLimit from 'express-rate-limit'
 import type { ChatRequest, EditRequest, EditResponse, FileNode, ProviderConfig, AgentRequest } from '../shared/types.js'
@@ -2483,6 +2484,208 @@ app.get('/api/git/log', async (req, res) => {
   }
 })
 
+// ---------- Suggestion cache (content-hash keyed, disk-persisted) ----------
+/**
+ * Each unique (file path + content + model) triplet costs exactly one LLM
+ * call across the lifetime of the project, regardless of how many tabs /
+ * sessions / dev-server-restarts pass through. Cache key is sha1 of those
+ * three so editing the file or switching models invalidates naturally.
+ *
+ * Persisted to .newton-cache/suggestions.json so the cache survives
+ * restarts. Capped at 1000 entries (LRU by timestamp) so the file can't
+ * grow without bound on huge projects.
+ */
+interface CachedSuggestion {
+  path: string
+  model: string
+  ts: number
+  suggestions: Array<{ title: string; reason: string; kind: string }>
+}
+const SUGGESTIONS_CACHE_FILE = path.join(WORKSPACE, '.newton-cache', 'suggestions.json')
+const SUGGESTIONS_CACHE_LIMIT = 1000
+let suggestionsCache: Record<string, CachedSuggestion> = {}
+let suggestionsCacheLoaded = false
+let suggestionsSaveTimer: NodeJS.Timeout | null = null
+
+async function loadSuggestionsCache(): Promise<void> {
+  if (suggestionsCacheLoaded) return
+  suggestionsCacheLoaded = true
+  try {
+    const raw = await fs.readFile(SUGGESTIONS_CACHE_FILE, 'utf8')
+    const parsed = JSON.parse(raw)
+    if (parsed?.version === 1 && parsed.entries && typeof parsed.entries === 'object') {
+      suggestionsCache = parsed.entries
+    }
+  } catch { /* no cache yet — first run */ }
+}
+
+function scheduleSuggestionsCacheSave(): void {
+  if (suggestionsSaveTimer) clearTimeout(suggestionsSaveTimer)
+  suggestionsSaveTimer = setTimeout(async () => {
+    try {
+      // LRU prune to the most recent N entries before writing.
+      const entries = Object.entries(suggestionsCache)
+      if (entries.length > SUGGESTIONS_CACHE_LIMIT) {
+        entries.sort(([, a], [, b]) => b.ts - a.ts)
+        suggestionsCache = Object.fromEntries(entries.slice(0, SUGGESTIONS_CACHE_LIMIT))
+      }
+      await fs.mkdir(path.dirname(SUGGESTIONS_CACHE_FILE), { recursive: true })
+      await fs.writeFile(
+        SUGGESTIONS_CACHE_FILE,
+        JSON.stringify({ version: 1, entries: suggestionsCache }, null, 2),
+        'utf8',
+      )
+    } catch { /* cache is best-effort */ }
+  }, 800)
+}
+
+function suggestionCacheKey(filePath: string, content: string, modelId: string): string {
+  const h = crypto.createHash('sha1')
+  h.update(filePath); h.update('\0')
+  h.update(content);  h.update('\0')
+  h.update(modelId)
+  return h.digest('hex')
+}
+
+/**
+ * Per-file "what could I do here?" suggestions. Used by the constellation's
+ * Node Details drawer. Asks the LLM (or a demo heuristic) for 3–5 short,
+ * actionable items keyed to what's actually in this file.
+ *
+ * Returns: { suggestions: [{ title, reason, kind }], cached: boolean }
+ */
+app.post('/api/node/suggestions', async (req, res) => {
+  try {
+    const { path: rel, provider } = req.body as { path: string; provider?: ProviderConfig }
+    if (!rel || !rel.trim()) return res.status(400).json({ error: 'path required' })
+    const abs = safeJoin(rel)
+    const content = await fs.readFile(abs, 'utf8')
+
+    const p = provider ?? { provider: 'demo', model: 'demo' }
+    if (p.provider === 'demo') {
+      // Demo heuristics are deterministic from content alone — no point
+      // hitting the disk cache; just compute.
+      return res.json({ suggestions: demoSuggestions(rel, content), cached: false })
+    }
+
+    // ----- Cache lookup: sha1(path + content + model) -----
+    await loadSuggestionsCache()
+    const modelId = `${p.provider}:${p.model ?? 'default'}`
+    const cacheKey = suggestionCacheKey(rel, content, modelId)
+    const hit = suggestionsCache[cacheKey]
+    if (hit) {
+      // Refresh the LRU timestamp so this entry sticks around.
+      hit.ts = Date.now()
+      scheduleSuggestionsCacheSave()
+      return res.json({ suggestions: hit.suggestions, cached: true })
+    }
+
+    // Real provider: pull lightweight graph context (callers + deps) so
+    // the LLM can suggest things like "extract this into a hook — it's
+    // imported by 14 callers".
+    let inbound: string[] = []
+    let outbound: string[] = []
+    try {
+      const builder = getGraphBuilder(WORKSPACE)
+      await builder.build()
+      const g = builder.getGraph()
+      if (g) {
+        inbound = (g.reverseEdges?.[rel] ?? []).slice(0, 12)
+        outbound = (g.nodes[rel]?.imports ?? []).slice(0, 12)
+      }
+    } catch { /* graph is best-effort */ }
+
+    const sys = [
+      'You are reviewing a single file in a codebase. Suggest 3 to 5 short, actionable',
+      'improvements specific to THIS file — what you can see in it. Avoid generic advice.',
+      '',
+      'Each suggestion MUST:',
+      '  - Be achievable as a single focused mission (one prompt the user could send back to you).',
+      '  - Reference something concrete in the file: a function name, a missing thing, a pattern.',
+      '  - Include a one-line reason, ≤ 18 words.',
+      '  - Use the most apt `kind` from: test, refactor, docs, perf, security, cleanup, review.',
+      '',
+      'Respond with ONLY valid JSON (no prose, no markdown fences):',
+      '{"suggestions":[{"title": string, "reason": string, "kind":"test|refactor|docs|perf|security|cleanup|review"}]}',
+    ].join('\n')
+
+    const user =
+      `File: ${rel}\nLines: ${content.split('\n').length}\n` +
+      (inbound.length ? `Imported by (callers): ${inbound.join(', ')}\n` : '') +
+      (outbound.length ? `Imports: ${outbound.join(', ')}\n` : '') +
+      `\nContent:\n\`\`\`\n${content.slice(0, 12_000)}\n\`\`\``
+
+    let raw: string
+    try {
+      raw = await llmComplete(p, sys, user, { maxTokens: 1200, jsonMode: true })
+    } catch (e) {
+      return res.status(502).json({ error: (e as Error).message, suggestions: [] })
+    }
+
+    // Parse JSON (with the fence-tolerant helper used elsewhere).
+    let parsed: any = null
+    try { parsed = JSON.parse(raw) } catch {
+      const m = raw.match(/\{[\s\S]*\}/)
+      if (m) { try { parsed = JSON.parse(m[0]) } catch { /* give up */ } }
+    }
+    const suggestions = Array.isArray(parsed?.suggestions)
+      ? parsed.suggestions
+          .filter((s: any) => s && typeof s.title === 'string')
+          .slice(0, 6)
+          .map((s: any) => ({
+            title: String(s.title),
+            reason: typeof s.reason === 'string' ? s.reason : '',
+            kind: ['test','refactor','docs','perf','security','cleanup','review'].includes(s.kind)
+              ? s.kind : 'review',
+          }))
+      : []
+
+    // Persist for next time — only cache non-empty results, otherwise a
+    // transient LLM stumble would lock in "no suggestions" until the file
+    // is edited.
+    if (suggestions.length > 0) {
+      suggestionsCache[cacheKey] = {
+        path: rel,
+        model: modelId,
+        ts: Date.now(),
+        suggestions,
+      }
+      scheduleSuggestionsCacheSave()
+    }
+    res.json({ suggestions, cached: false })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message, suggestions: [] })
+  }
+})
+
+/** Heuristic suggestions when the user is on demo mode (no LLM key). */
+function demoSuggestions(rel: string, content: string): Array<{ title: string; reason: string; kind: string }> {
+  const out: Array<{ title: string; reason: string; kind: string }> = []
+  const lines = content.split('\n').length
+  const hasTodo = /TODO|FIXME|XXX/i.test(content)
+  const hasAnyType = /:\s*any\b/.test(content)
+  const isTest = /\.test\.|\.spec\.|^tests\//.test(rel)
+  if (!isTest && lines > 30) {
+    out.push({ title: `Add unit tests for ${rel.split('/').pop()}`, reason: 'No tests detected for this module.', kind: 'test' })
+  }
+  if (lines > 400) {
+    out.push({ title: 'Split this file into smaller modules', reason: `${lines} lines — past the readability cliff.`, kind: 'refactor' })
+  }
+  if (hasAnyType) {
+    out.push({ title: 'Replace `any` types with concrete shapes', reason: 'Loses type safety where it appears.', kind: 'refactor' })
+  }
+  if (hasTodo) {
+    out.push({ title: 'Resolve open TODO/FIXME markers', reason: 'Comments mark unfinished work.', kind: 'cleanup' })
+  }
+  if (!/\/\*\*|\/\/\s*[A-Z]/.test(content.slice(0, 400))) {
+    out.push({ title: 'Add a top-of-file overview comment', reason: 'No documentation block at the top.', kind: 'docs' })
+  }
+  if (out.length === 0) {
+    out.push({ title: `Review ${rel.split('/').pop()}`, reason: 'Generic review — connect an LLM provider for richer suggestions.', kind: 'review' })
+  }
+  return out.slice(0, 5)
+}
+
 /**
  * Recent commits touching a specific file. Used by the constellation's
  * Node Details drawer. Path is validated via safeJoin to make sure it's
@@ -2508,6 +2711,49 @@ app.get('/api/git/file-log', async (req, res) => {
       return { hash, short, message, author, date }
     })
     res.json({ commits })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/**
+ * Per-file commit-frequency stats — drives the Quality & Risk section of
+ * the Node Details drawer. Returns commit counts over a few rolling
+ * windows so we can render "change frequency" + "days since last touch"
+ * without the client doing date math on the full log.
+ */
+app.get('/api/git/file-stats', async (req, res) => {
+  try {
+    const rel = String(req.query.path ?? '').trim()
+    if (!rel) return res.status(400).json({ error: 'path required' })
+    safeJoin(rel)
+    // %ci → committer date in ISO format. One line per commit.
+    const raw = await git(['log', '--pretty=format:%ci', '--', rel])
+    if (!raw) {
+      return res.json({
+        totalCommits: 0, last7Days: 0, last30Days: 0, last90Days: 0,
+        daysSinceLastTouch: null, distinctAuthors: 0,
+      })
+    }
+    const times = raw.split('\n').filter(Boolean)
+      .map((s) => new Date(s).getTime())
+      .filter((t) => Number.isFinite(t))
+    const now = Date.now()
+    const ms = 86_400_000
+    const within = (days: number) => times.filter((t) => now - t < days * ms).length
+    // Distinct authors — fetch in a second cheap call (could combine but
+    // the format separator gets gnarly, and these files rarely have 1000+
+    // commits so a second `git log` is fine).
+    const authorsRaw = await git(['log', '--pretty=format:%an', '--', rel])
+    const authors = new Set(authorsRaw.split('\n').filter(Boolean))
+    res.json({
+      totalCommits: times.length,
+      last7Days: within(7),
+      last30Days: within(30),
+      last90Days: within(90),
+      daysSinceLastTouch: times.length > 0 ? Math.floor((now - times[0]) / ms) : null,
+      distinctAuthors: authors.size,
+    })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }

@@ -25,6 +25,12 @@ export default function ConstellationLayout() {
   const setSettingsOpen = useStore((s) => s.setSettingsOpen)
   const setPaletteOpen = useStore((s) => s.setPaletteOpen)
   const workspacePath = useStore((s) => s.workspacePath)
+  const loadMissions = useStore((s) => s.loadMissions)
+
+  // Classic layout fetches missions when the user opens Mission Control;
+  // in constellation that panel never mounts, so the sessions list in
+  // ⌘K would be empty without this. Cheap fire-and-forget.
+  useEffect(() => { loadMissions() }, [loadMissions])
   // The active mission's step state drives the canvas activity overlay.
   // We pull straight from the store so the canvas re-renders on each SSE tick.
   const activeMission = useStore((s) => s.activeMission)
