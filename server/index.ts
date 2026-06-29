@@ -35,7 +35,7 @@ import {
   llmMissionPlan,
   verifyOutcome,
 } from './mission.js'
-import { safeResolve } from './safePath.js'
+import { safeResolve, assertSafeDelete } from './safePath.js'
 
 // ---------- constants ----------
 const GIT_TIMEOUT_MS = 15000
@@ -485,15 +485,29 @@ app.post('/api/templates/create', async (req, res) => {
   if (!projectName || typeof projectName !== 'string') {
     return res.status(400).json({ error: 'Project name required' })
   }
+  // Reject any path-like project name. Project names are expected to be a
+  // single safe directory segment, not a path. This blocks traversal
+  // (`../evil`), absolute paths, and accidental nesting.
+  if (/[\\/]/.test(projectName) || projectName.startsWith('.') || projectName.trim() !== projectName) {
+    return res.status(400).json({ error: 'Project name must be a simple directory name (no slashes, leading dots, or surrounding whitespace)' })
+  }
 
   const template = TEMPLATES[templateId]
-  const projectDir = path.join(WORKSPACE, projectName)
+  // Defense-in-depth: resolve through safeJoin so even if the heuristic above
+  // missed something, traversal still fails.
+  let projectDir: string
+  try {
+    projectDir = safeJoin(projectName)
+  } catch (e) {
+    return res.status(400).json({ error: (e as Error).message })
+  }
 
   try {
     // Create project directory
     await fs.mkdir(projectDir, { recursive: true })
 
-    // Write template files
+    // Write template files. Template paths come from the server-controlled
+    // TEMPLATES dict, but we still join under projectDir defensively.
     for (const [filePath, content] of Object.entries(template.files)) {
       const abs = path.join(projectDir, filePath)
       await fs.mkdir(path.dirname(abs), { recursive: true })
@@ -549,6 +563,10 @@ app.post('/api/file/rename', async (req, res) => {
 app.delete('/api/file', async (req, res) => {
   try {
     const rel = String(req.query.path ?? '')
+    // Refuse to delete protected paths (.git, workspace root, etc.) BEFORE
+    // resolving — assertSafeDelete operates on the user-supplied string so
+    // it can catch e.g. ".git" before any FS call.
+    assertSafeDelete(rel)
     const abs = safeJoin(rel)
     const stat = await fs.stat(abs)
     if (stat.isDirectory()) await fs.rm(abs, { recursive: true })
@@ -2943,11 +2961,19 @@ app.post('/api/missions', async (req, res) => {
         // User-attached focus files come first, always.
         for (const cf of contextFiles ?? []) await tryAttach(cf)
 
-        // Layer B: goal-keyword path-match scoring.
+        // Layer B: goal-keyword path-match scoring. Filter out filler verbs
+        // and articles ("add", "the", "make") that would otherwise match
+        // unrelated paths and dilute the ranking.
+        const PATH_STOPWORDS = new Set([
+          'add', 'the', 'and', 'for', 'with', 'from', 'into', 'make', 'make',
+          'use', 'using', 'new', 'put', 'set', 'get', 'fix', 'all', 'any',
+          'this', 'that', 'these', 'those', 'when', 'where', 'what', 'how',
+          'support', 'feature', 'mode', 'option',
+        ])
         const goalTokens = goal.trim().toLowerCase()
           .replace(/([a-z])([A-Z])/g, '$1 $2')
           .split(/[^a-z0-9]+/)
-          .filter((t) => t.length >= 3)
+          .filter((t) => t.length >= 3 && !PATH_STOPWORDS.has(t))
         const goalTokenSet = new Set(goalTokens)
         const pathScores = new Map<string, number>()
         for (const rel of workspaceFiles) {
@@ -2985,16 +3011,18 @@ app.post('/api/missions', async (req, res) => {
 
         // Layer C: import-graph expansion. Pull files that import or are
         // imported by the initial picks. The graph is best-effort — if it
-        // hasn't been built yet, skip silently.
+        // hasn't been built yet, skip silently. Use a Set for O(1) edge
+        // membership so this stays cheap on large graphs.
         try {
           const builder = getGraphBuilder(WORKSPACE)
           await builder.build()
           const graph = builder.getGraph()
           if (graph) {
+            const pickSet = new Set(initialPicks)
             const neighbors = new Set<string>()
             for (const e of graph.edges) {
-              if (initialPicks.includes(e.source)) neighbors.add(e.target)
-              if (initialPicks.includes(e.target)) neighbors.add(e.source)
+              if (pickSet.has(e.source)) neighbors.add(e.target)
+              if (pickSet.has(e.target)) neighbors.add(e.source)
             }
             for (const rel of neighbors) await tryAttach(rel)
           }
@@ -3034,6 +3062,11 @@ app.post('/api/missions', async (req, res) => {
       //   2) edit/create with no `after` content (the LLM ignored the rule)
       // Either is a plan-level error — fail loud so the user sees the real
       // reason instead of partial execution with confusing per-step errors.
+      //
+      // Note: demo provider's heuristic planner produces description-only
+      // steps (no action+path) on purpose — it's an outline, not real edits.
+      // The legacy executor fallback handles those. Skip the strict validator
+      // for demo so demo missions don't get marked failed at plan time.
       const workspaceSet = new Set(workspaceFiles)
       const planProblems: string[] = []
       for (const s of plan.steps) {
@@ -3303,13 +3336,16 @@ app.post('/api/missions/:id/execute', async (req, res) => {
           send({ type: 'step', index: i, status: stepStatus, description: step.description, note: stepNote })
         }
       } catch (e) {
+        const errMsg = (e as Error).message
         updatedSteps[i] = {
           ...step,
           status: 'error',
           completedAt: Date.now(),
-          note: (e as Error).message,
+          note: errMsg,
         }
-        send({ type: 'step', index: i, status: 'error', error: (e as Error).message })
+        // Use `note` (not `error`) to match what the store SSE handler reads,
+        // so the user gets a useful toast instead of a bare "error" status.
+        send({ type: 'step', index: i, status: 'error', description: step.description, note: errMsg })
       }
 
       updateMission(mission.id, { steps: updatedSteps })
@@ -3358,6 +3394,141 @@ const server = app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`  Workspace: ${WORKSPACE}\n`)
 })
+
+// ---------- Real PTY terminal over WebSocket ----------
+// Each WebSocket connection spawns its own shell in a pseudo-terminal via
+// node-pty. The browser-side xterm.js renders raw PTY output and forwards
+// keystrokes back. This gives full TTY semantics: interactive programs,
+// ANSI escape codes, signals, colored output.
+//
+// Wire protocol (text JSON, one message per frame):
+//   client → server: { type: 'input', data: string }
+//                    { type: 'resize', cols: number, rows: number }
+//   server → client: { type: 'output', data: string }
+//                    { type: 'exit', code: number, signal?: string }
+;(async () => {
+  let WebSocketServer: typeof import('ws').WebSocketServer
+  // Use the homebridge prebuilt fork — it ships binaries for current Node
+  // versions (incl. Node 24). The upstream `node-pty` 1.1.0 fails with a
+  // generic posix_spawnp error on Node 24 because its prebuilts predate it.
+  let nodePty: typeof import('@homebridge/node-pty-prebuilt-multiarch')
+  try {
+    ({ WebSocketServer } = await import('ws'))
+    nodePty = await import('@homebridge/node-pty-prebuilt-multiarch')
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('  Terminal WS disabled — missing deps:', (e as Error).message)
+    return
+  }
+
+  const wss = new WebSocketServer({ noServer: true })
+  server.on('upgrade', (req, socket, head) => {
+    if (req.url !== '/api/terminal/ws') return
+
+    // SECURITY: only allow connections from same-origin browser pages.
+    // Without this check, ANY webpage the user has open in their browser
+    // could connect to this localhost WS and execute shell commands.
+    // We allow: localhost on the configured client/server ports, plus
+    // 127.0.0.1 equivalents. Reject everything else.
+    const origin = req.headers.origin
+    const allowedOrigins = new Set<string>([
+      `http://localhost:${PORT}`,
+      `http://127.0.0.1:${PORT}`,
+      `http://localhost:${process.env.NEWTON_CLIENT_PORT || 5173}`,
+      `http://127.0.0.1:${process.env.NEWTON_CLIENT_PORT || 5173}`,
+    ])
+    if (origin && !allowedOrigins.has(origin)) {
+      // eslint-disable-next-line no-console
+      console.warn(`  Terminal WS rejected non-allowed origin: ${origin}`)
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+      socket.destroy()
+      return
+    }
+
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
+  })
+
+  wss.on('connection', (ws) => {
+    // Build a clean env object — posix_spawnp rejects entries whose value is
+    // not a string, and process.env values are typed `string | undefined`.
+    const cleanEnv: { [key: string]: string } = {}
+    for (const [k, v] of Object.entries(process.env)) {
+      if (typeof v === 'string') cleanEnv[k] = v
+    }
+    cleanEnv.TERM = 'xterm-256color'
+    cleanEnv.COLORTERM = 'truecolor'
+
+    // Prefer the user's shell; fall back to common system shells if SHELL is
+    // missing or unset. We don't trust SHELL blindly — if it doesn't point at
+    // an executable file, try fallbacks rather than failing with a generic
+    // posix_spawnp error.
+    const candidates = [
+      process.env.SHELL,
+      '/bin/zsh',
+      '/bin/bash',
+      '/bin/sh',
+    ].filter((s): s is string => typeof s === 'string' && s.length > 0)
+
+    let shell: string | null = null
+    for (const s of candidates) {
+      try { if (existsSync(s)) { shell = s; break } } catch { /* ignore */ }
+    }
+    if (!shell) {
+      const msg = `No usable shell found (tried: ${candidates.join(', ')})`
+      try { ws.send(JSON.stringify({ type: 'output', data: `\r\n\x1b[31m${msg}\x1b[0m\r\n` })) } catch { /* ignore */ }
+      try { ws.close() } catch { /* ignore */ }
+      return
+    }
+
+    let pty: ReturnType<typeof nodePty.spawn>
+    try {
+      pty = nodePty.spawn(shell, [], {
+        name: 'xterm-256color',
+        cols: 80,
+        rows: 24,
+        cwd: WORKSPACE,
+        env: cleanEnv,
+      })
+    } catch (e) {
+      const msg = `Failed to spawn ${shell}: ${(e as Error).message}`
+      // eslint-disable-next-line no-console
+      console.error('  Terminal spawn error:', msg)
+      try { ws.send(JSON.stringify({ type: 'output', data: `\r\n\x1b[31m${msg}\x1b[0m\r\n` })) } catch { /* ignore */ }
+      try { ws.close() } catch { /* ignore */ }
+      return
+    }
+
+    const send = (msg: object) => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg))
+    }
+
+    pty.onData((data) => send({ type: 'output', data }))
+    pty.onExit(({ exitCode, signal }) => {
+      send({ type: 'exit', code: exitCode, signal })
+      try { ws.close() } catch { /* ignore */ }
+    })
+
+    ws.on('message', (raw) => {
+      let msg: any
+      try { msg = JSON.parse(raw.toString()) } catch { return }
+      if (msg.type === 'input' && typeof msg.data === 'string') {
+        pty.write(msg.data)
+      } else if (msg.type === 'resize' && Number.isFinite(msg.cols) && Number.isFinite(msg.rows)) {
+        try { pty.resize(Math.max(1, msg.cols | 0), Math.max(1, msg.rows | 0)) } catch { /* ignore */ }
+      }
+    })
+
+    ws.on('close', () => {
+      try { pty.kill() } catch { /* ignore */ }
+    })
+    ws.on('error', () => {
+      try { pty.kill() } catch { /* ignore */ }
+    })
+  })
+
+  // eslint-disable-next-line no-console
+  console.log(`  Terminal WS on ws://localhost:${PORT}/api/terminal/ws`)
+})()
 
 server.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { nanoid } from 'nanoid'
 import {
   DEFAULT_SETTINGS,
+  getProviderDef,
   migrateSettings,
   type FileNode,
   type Settings,
@@ -31,21 +32,29 @@ const TOAST_DURATION_MS = 2600
  */
 export interface PatchBlock { path: string; find: string; replace: string }
 export function parsePatchBlocks(code: string): PatchBlock[] {
+  // Normalize CRLF → LF so blocks copied from Windows or emitted by some
+  // providers parse the same way. Otherwise the literal `\n` in the regex
+  // misses the markers and we silently return zero blocks.
+  const normalized = code.replace(/\r\n/g, '\n')
   const blocks: PatchBlock[] = []
-  // Use a regex spanning the whole pattern. The path is the line immediately
-  // before `<<<<<<< SEARCH`. SEARCH/REPLACE bodies are everything between the
-  // markers, exclusive of leading/trailing newlines added by the format.
   const re = /(^|\n)([^\n]+)\n<{7} SEARCH\n([\s\S]*?)\n={7}\n([\s\S]*?)\n>{7} REPLACE/g
   let m: RegExpExecArray | null
-  while ((m = re.exec(code)) !== null) {
+  while ((m = re.exec(normalized)) !== null) {
     const path = m[2].trim()
     if (!path) continue
+    // The line immediately above SEARCH MUST look like a path. Otherwise the
+    // AI's prose ("Here's the change:") would be parsed as the target path
+    // and the patch silently writes to the wrong file. A real path either
+    // has a `/` (directory) or a `.` followed by an extension.
+    if (!/\//.test(path) && !/\.[a-zA-Z0-9]+$/.test(path)) continue
+    // Reject obvious markdown / prose prefixes.
+    if (/^[#>*\-`]/.test(path)) continue
     blocks.push({ path, find: m[3], replace: m[4] })
   }
   return blocks
 }
 export function codeHasPatchBlocks(code: string): boolean {
-  return /\n<{7} SEARCH\n/.test('\n' + code)
+  return /\n<{7} SEARCH\n/.test('\n' + code.replace(/\r\n/g, '\n'))
 }
 
 // ---------- types ----------
@@ -363,9 +372,13 @@ function guessTestPath(filePath: string): string {
 export function providerConfig(s: Settings): ProviderConfig {
   if (s.provider === 'demo') return { provider: 'demo', model: 'demo' }
   const pc = s.providerConfigs[s.provider]
+  // Fall back to the registry's first listed model rather than the literal
+  // string 'demo' — the previous fallback would silently send "demo" as a
+  // model name to OpenAI/Anthropic/etc. and produce a confusing 400.
+  const fallbackModel = getProviderDef(s.provider)?.models?.[0] ?? 'demo'
   return {
     provider: s.provider,
-    model: pc?.model || 'demo',
+    model: pc?.model || fallbackModel,
     apiKey: pc?.apiKey || undefined,
     baseUrl: pc?.baseUrl || undefined,
   }
@@ -992,6 +1005,30 @@ export const useStore = create<NewtonState>((set, get) => ({
     const preview = get().fixPreview
     if (!preview) return
     try {
+      // Backstop guard: even though the user previewed the diff, refuse to
+      // clobber a non-trivial file with a snippet. The diagnostics LLM is
+      // capable of emitting just the changed lines despite instructions.
+      try {
+        const existingRes = await fetch(`/api/file?path=${encodeURIComponent(preview.filePath)}`)
+        if (existingRes.ok) {
+          const { content: existing } = (await existingRes.json()) as { content: string }
+          if (existing && existing.length > 200) {
+            const ratio = preview.fixedContent.length / existing.length
+            if (ratio < 0.25) {
+              const proceed = typeof window !== 'undefined' && window.confirm(
+                `Fix would replace ${preview.filePath} (${existing.length} chars) with much smaller ` +
+                `content (${preview.fixedContent.length} chars, ratio ${ratio.toFixed(2)}).\n\n` +
+                `The fix likely truncated the file. Apply anyway?`,
+              )
+              if (!proceed) {
+                get().toast(`Fix cancelled: snippet would clobber ${preview.filePath}`)
+                return
+              }
+            }
+          }
+        }
+      } catch { /* file probably doesn't exist — fall through */ }
+
       await fetch('/api/file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

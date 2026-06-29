@@ -18,6 +18,13 @@ export default defineConfig(() => {
     server: {
       port: clientPort,
       proxy: {
+        // WebSocket terminal endpoint — must be matched BEFORE the broader
+        // /api route so Vite knows to upgrade the connection.
+        '/api/terminal/ws': {
+          target: `ws://localhost:${backendPort}`,
+          ws: true,
+          changeOrigin: true,
+        },
         '/api': {
           target: `http://localhost:${backendPort}`,
           changeOrigin: true,

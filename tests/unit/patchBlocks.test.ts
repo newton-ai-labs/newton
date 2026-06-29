@@ -71,4 +71,58 @@ describe('parsePatchBlocks (chat Apply patch format)', () => {
     expect(codeHasPatchBlocks('foo\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE')).toBe(true)
     expect(codeHasPatchBlocks('plain code')).toBe(false)
   })
+
+  it('rejects a block whose path line is clearly prose (no slash/extension)', () => {
+    const code = [
+      "Here's the change:",
+      '<<<<<<< SEARCH',
+      'foo',
+      '=======',
+      'bar',
+      '>>>>>>> REPLACE',
+    ].join('\n')
+    expect(parsePatchBlocks(code)).toEqual([])
+  })
+
+  it('rejects a block prefixed by a markdown line', () => {
+    const code = [
+      '# Fix it',
+      '<<<<<<< SEARCH',
+      'foo',
+      '=======',
+      'bar',
+      '>>>>>>> REPLACE',
+    ].join('\n')
+    expect(parsePatchBlocks(code)).toEqual([])
+  })
+
+  it('accepts a path with extension (no slash)', () => {
+    const code = [
+      'config.json',
+      '<<<<<<< SEARCH',
+      '"a"',
+      '=======',
+      '"b"',
+      '>>>>>>> REPLACE',
+    ].join('\n')
+    const blocks = parsePatchBlocks(code)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].path).toBe('config.json')
+  })
+
+  it('parses blocks with CRLF line endings', () => {
+    const code = [
+      'src/foo.ts',
+      '<<<<<<< SEARCH',
+      'const x = 1',
+      '=======',
+      'const x = 2',
+      '>>>>>>> REPLACE',
+    ].join('\r\n')
+    const blocks = parsePatchBlocks(code)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].path).toBe('src/foo.ts')
+    expect(blocks[0].find).toBe('const x = 1')
+    expect(blocks[0].replace).toBe('const x = 2')
+  })
 })

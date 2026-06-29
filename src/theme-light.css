@@ -6,16 +6,20 @@
   --bg-2: #eceef1;
   --bg-3: #e2e5ea;
   --panel: #f6f7f9;
+  --panel-2: #eceef1;
   --panel-bg: #f6f7f9;
+  /* index.css uses --bg-sidebar; --sidebar-bg above is for completeness. */
+  --bg-sidebar: #f0f1f4;
   --sidebar-bg: #f0f1f4;
   --editor-bg: #ffffff;
   --surface: #ffffff;
   --surface-2: #f0f1f4;
   --elevated: #ffffff;
 
-  /* Text */
+  /* Text — index.css uses --text-main, --text, --text-dim, --text-faint, --text-muted */
   --fg: #1c1e21;
   --text: #1c1e21;
+  --text-main: #1c1e21;
   --text-primary: #1c1e21;
   --text-secondary: #51565d;
   --text-muted: #6b7280;
@@ -32,6 +36,9 @@
 
   /* Accent (Newton purple) */
   --accent: #7c3aed;
+  --accent-2: #0891b2; /* darker cyan than dark theme — readable on white */
+  --accent-grad: linear-gradient(135deg, #7c3aed 0%, #0891b2 100%);
+  --accent-rgb: 124, 58, 237;
   --accent-hover: #6d28d9;
   --accent-fg: #ffffff;
   --primary: #7c3aed;
@@ -39,6 +46,8 @@
   --blue: #2563eb;
   --green: #16a34a;
   --red: #dc2626;
+  --yellow: #ca8a04;
+  --orange: #ea580c;
 
   /* Status */
   --success: #16a34a;

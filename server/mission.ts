@@ -287,17 +287,21 @@ async function verifyLint(): Promise<{ passed: boolean; actual: string }> {
 // ---------- LLM mission planning (real providers) ----------
 /**
  * Single-tier planner: the LLM emits the concrete file actions the executor
- * will run directly. Each step is typed (create|edit|delete|read) with a
- * workspace-relative path; create/edit steps include the FULL final file
- * content in `after`. No second-pass per-step planning happens downstream.
+ * will run directly. Each step is typed (patch|create|edit|delete) with a
+ * workspace-relative path. `read` actions are filtered out — they're always
+ * no-ops at planning time. No second-pass per-step planning happens.
  *
- * `workspaceFiles` is a manifest of currently-existing files (relative paths)
- * — the LLM uses it both to choose targets for edits and to avoid recreating
- * files that already exist.
+ * Action shapes:
+ *   - patch:  { path, edits: [{find, replace}] }   — preferred for modifications
+ *   - edit:   { path, after }                       — full-file rewrite
+ *   - create: { path, after }                       — new file
+ *   - delete: { path }                              — remove file
  *
- * `relevantContext` is pre-formatted code excerpts from semantic search, so
- * the LLM can see the actual current contents of the most relevant files
- * before proposing edits.
+ * Inputs:
+ *   - workspaceFiles:   relative paths the LLM can target
+ *   - relevantContext:  excerpts from semantic search (less authoritative)
+ *   - attachedContents: FULL bytes of files the LLM is likely to edit
+ *   - repoMap:          per-file outline (path + top-level symbols)
  */
 export async function llmMissionPlan(
   goal: string,

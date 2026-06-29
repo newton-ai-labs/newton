@@ -6,6 +6,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Newton — an AI-native code editor. A better Cursor." />
     <title>Newton — AI Code Editor</title>
+    <script>
+      // Apply the persisted theme BEFORE first paint to avoid FOUC.
+      // Mirrors src/theme.ts initTheme() but runs synchronously in head.
+      (function () {
+        try {
+          var t = localStorage.getItem('newton.theme');
+          if (t !== 'light' && t !== 'dark') {
+            t = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          }
+          document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
