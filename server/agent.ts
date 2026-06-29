@@ -330,25 +330,120 @@ function kebab(s: string): string {
  */
 export async function executeStep(step: AgentStep): Promise<AgentStep> {
   try {
+    if (!step.path || !step.path.trim()) {
+      return { ...step, status: 'error', note: 'Missing path' }
+    }
     const abs = safeResolve(WORKSPACE, step.path)
     if (step.action === 'delete') {
       assertSafeDelete(step.path)
       await fs.rm(abs, { recursive: true, force: true })
       return { ...step, status: 'done', note: `Deleted ${step.path}` }
     }
-    if (step.action === 'create') {
+    if (step.action === 'create' || step.action === 'edit') {
+      if (typeof step.after !== 'string' || step.after.length === 0) {
+        // Refuse to silently blank a file. The planner is expected to emit
+        // the full final content in `after`.
+        return {
+          ...step,
+          status: 'error',
+          note: `Refusing to ${step.action} ${step.path}: no content provided (after was empty or missing).`,
+        }
+      }
+      let before: string | undefined
+      if (step.action === 'edit') {
+        before = await fs.readFile(abs, 'utf8').catch(() => undefined)
+        // Size-ratio guard: catch the common failure mode where the LLM
+        // emits a snippet/summary instead of the full file content. A real
+        // edit usually preserves most of the file; if the new content is a
+        // tiny fraction of the original AND the original was non-trivial,
+        // the LLM almost certainly produced bad output. Refuse instead of
+        // destroying the user's file.
+        if (before && before.length > 200) {
+          const ratio = step.after.length / before.length
+          if (ratio < 0.25) {
+            return {
+              ...step,
+              before,
+              status: 'error',
+              note:
+                `Refusing to edit ${step.path}: new content is ${step.after.length} chars vs ` +
+                `${before.length} existing chars (ratio ${ratio.toFixed(2)}). The planner ` +
+                `likely emitted a snippet instead of the full file. Re-run with a stronger model ` +
+                `or split the change.`,
+            }
+          }
+        }
+      }
       await fs.mkdir(path.dirname(abs), { recursive: true })
-      await fs.writeFile(abs, step.after ?? '', 'utf8')
-      return { ...step, status: 'done', note: `Created ${step.path}` }
-    }
-    if (step.action === 'edit') {
-      await fs.mkdir(path.dirname(abs), { recursive: true })
-      await fs.writeFile(abs, step.after ?? '', 'utf8')
-      return { ...step, status: 'done', note: `Edited ${step.path}` }
+      await fs.writeFile(abs, step.after, 'utf8')
+      return {
+        ...step,
+        before: before ?? step.before,
+        status: 'done',
+        note: step.action === 'create' ? `Created ${step.path}` : `Edited ${step.path}`,
+      }
     }
     if (step.action === 'read') {
       const content = await fs.readFile(abs, 'utf8').catch(() => '')
       return { ...step, status: 'done', before: content, note: `Read ${step.path}` }
+    }
+    if (step.action === 'patch') {
+      if (!Array.isArray(step.edits) || step.edits.length === 0) {
+        return { ...step, status: 'error', note: `patch ${step.path}: no edits provided` }
+      }
+      let content: string
+      try {
+        content = await fs.readFile(abs, 'utf8')
+      } catch (e) {
+        return { ...step, status: 'error', note: `patch ${step.path}: cannot read file: ${(e as Error).message}` }
+      }
+      const before = content
+      for (let i = 0; i < step.edits.length; i++) {
+        const { find, replace } = step.edits[i]
+        if (typeof find !== 'string' || find.length === 0) {
+          return { ...step, before, status: 'error', note: `patch ${step.path}: edit ${i + 1} has empty find` }
+        }
+        if (typeof replace !== 'string') {
+          return { ...step, before, status: 'error', note: `patch ${step.path}: edit ${i + 1} has invalid replace` }
+        }
+        // Count occurrences (literal string match, not regex)
+        let count = 0
+        let from = 0
+        let idx: number
+        while ((idx = content.indexOf(find, from)) !== -1) {
+          count++
+          from = idx + find.length
+          if (count > 1) break
+        }
+        if (count === 0) {
+          const preview = find.split('\n').slice(0, 3).join('\n').slice(0, 200)
+          return {
+            ...step,
+            before,
+            status: 'error',
+            note: `patch ${step.path}: edit ${i + 1}/${step.edits.length} find-string not found. Snippet: "${preview}..."`,
+          }
+        }
+        if (count > 1) {
+          return {
+            ...step,
+            before,
+            status: 'error',
+            note: `patch ${step.path}: edit ${i + 1}/${step.edits.length} find-string is ambiguous (matches ${count}+ times). Add surrounding context to the find string.`,
+          }
+        }
+        // Exactly one match — replace it. Use the function form so $&, $1,
+        // etc. in the replacement aren't interpreted as backreferences.
+        content = content.replace(find, () => replace)
+      }
+      await fs.writeFile(abs, content, 'utf8')
+      return {
+        ...step,
+        before,
+        after: content,
+        status: 'done',
+        note: `Patched ${step.path} (${step.edits.length} edit${step.edits.length === 1 ? '' : 's'})`,
+      }
     }
     return { ...step, status: 'skipped', note: 'Unknown action' }
   } catch (e) {

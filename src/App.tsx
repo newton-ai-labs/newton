@@ -27,6 +27,7 @@ import FileExplorer from './components/FileExplorer'
 import EditorArea from './components/EditorArea'
 import ChatPanel from './components/ChatPanel'
 import CommandPalette from './components/CommandPalette'
+import ThemeToggle from './components/ThemeToggle'
 
 // Lazy-loaded components for code splitting
 const SettingsModal = lazy(() => import('./components/SettingsModal'))
@@ -259,6 +260,7 @@ export default function App() {
         >
           <Command size={19} />
         </button>
+        <ThemeToggle className="activity-btn" />
         <button
           className="activity-btn"
           title="Settings (⌘,)"

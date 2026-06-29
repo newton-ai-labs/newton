@@ -453,6 +453,52 @@ export class CodebaseIndex {
   }
 
   /**
+   * Build a compact "repo map" — every indexed file with its top-level
+   * symbols. The LLM uses this to orient itself in the codebase without
+   * needing every file's full content. Cheap context, high signal.
+   *
+   * Format per file:
+   *   src/components/Foo.tsx
+   *     class: Foo
+   *     function: useFoo
+   *
+   * Returns the truncated map plus a marker if any files were dropped.
+   */
+  getRepoMap(maxChars = 25_000): string {
+    // Group chunks by file, collect unique named symbols.
+    const byFile = new Map<string, Set<string>>()
+    for (const [, indexed] of this.chunks) {
+      const c = indexed.chunk
+      if (!c.symbol) continue
+      if (!byFile.has(c.filePath)) byFile.set(c.filePath, new Set())
+      const label = `${c.kind}: ${c.symbol}`
+      byFile.get(c.filePath)!.add(label)
+    }
+    // Include files with no detected symbols too (just path), so the LLM
+    // sees CSS, JSON, MD, etc.
+    for (const p of this.filePaths) {
+      if (!byFile.has(p)) byFile.set(p, new Set())
+    }
+    const paths = [...byFile.keys()].sort()
+
+    let out = ''
+    let dropped = 0
+    for (const p of paths) {
+      const syms = [...byFile.get(p)!]
+      const block = syms.length > 0
+        ? `${p}\n${syms.map((s) => `  ${s}`).join('\n')}\n`
+        : `${p}\n`
+      if (out.length + block.length > maxChars) {
+        dropped++
+        continue
+      }
+      out += block
+    }
+    if (dropped > 0) out += `\n(${dropped} more files omitted to fit budget)\n`
+    return out.trim()
+  }
+
+  /**
    * Get context for the AI: returns concatenated code from top search hits,
    * formatted for inclusion in an LLM prompt.
    */

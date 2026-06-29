@@ -316,6 +316,23 @@ export default function MissionPanel() {
                           </span>
                           <span style={{ flex: 1, color: step.status === 'skipped' ? 'var(--text-dim)' : 'var(--text)' }}>
                             {step.description}
+                            {step.note && (step.status === 'error' || step.status === 'skipped') && (
+                              <div
+                                style={{
+                                  marginTop: 3,
+                                  fontFamily: 'var(--font-mono, monospace)',
+                                  fontSize: 10,
+                                  color: step.status === 'error' ? 'var(--red, #f07178)' : 'var(--text-dim)',
+                                  whiteSpace: 'pre-wrap',
+                                  background: 'var(--bg-elev, rgba(255,255,255,0.03))',
+                                  padding: '4px 6px',
+                                  borderRadius: 3,
+                                  border: '1px solid var(--border)',
+                                }}
+                              >
+                                {step.note}
+                              </div>
+                            )}
                           </span>
                           {/* quick controls */}
                           {step.status !== 'done' && (
@@ -535,12 +552,15 @@ const badgeStyle: React.CSSProperties = {
 }
 
 const ctrlBtnStyle: React.CSSProperties = {
-  display: 'flex',
+  display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
   fontSize: 11,
   padding: '5px 12px',
   borderRadius: 5,
+  width: 'auto',
+  height: 'auto',
+  whiteSpace: 'nowrap',
 }
 
 const missionCardStyle = (expanded: boolean): React.CSSProperties => ({

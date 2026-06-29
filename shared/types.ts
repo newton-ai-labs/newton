@@ -258,16 +258,28 @@ export interface EditResponse {
 }
 
 // ---------- Agent Mode ----------
+/**
+ * A single find/replace within a `patch` action. `find` must appear EXACTLY
+ * once in the target file (else the executor rejects with an explanatory
+ * error — multi-match is ambiguous and zero-match means the snippet drifted).
+ */
+export interface PatchEdit {
+  find: string
+  replace: string
+}
+
 export interface AgentStep {
   id: string
-  action: 'create' | 'edit' | 'delete' | 'read'
+  action: 'create' | 'edit' | 'delete' | 'read' | 'patch'
   path: string
   description: string
   status: 'pending' | 'running' | 'done' | 'error' | 'skipped'
   /** content before edit (for diff) */
   before?: string
-  /** proposed/ final content after */
+  /** proposed/ final content after (used by create/edit) */
   after?: string
+  /** find/replace operations applied left-to-right (used by patch) */
+  edits?: PatchEdit[]
   note?: string
 }
 
@@ -488,7 +500,7 @@ export interface ConsequenceFlag {
 export interface StepAssessment {
   stepId: string
   path: string
-  action: 'create' | 'edit' | 'delete' | 'read'
+  action: 'create' | 'edit' | 'delete' | 'read' | 'patch'
   risk: RiskLevel
   reversibility: Reversibility
   /** number of lines added/removed if determinable */
@@ -538,7 +550,20 @@ export interface MissionStep {
   id: string
   description: string
   status: 'pending' | 'running' | 'done' | 'error' | 'skipped'
-  /** optional agent steps produced for this mission step */
+  /**
+   * Concrete file action this step performs. When present, the executor
+   * runs it directly (no second-tier planning needed).
+   */
+  action?: 'create' | 'edit' | 'delete' | 'read' | 'patch'
+  /** workspace-relative file path for create/edit/delete/read/patch */
+  path?: string
+  /** full final file content for create/edit */
+  after?: string
+  /** captured content for diff display */
+  before?: string
+  /** find/replace edits for patch action */
+  edits?: PatchEdit[]
+  /** optional agent steps produced for this mission step (legacy two-tier path) */
   agentSteps?: AgentStep[]
   note?: string
   startedAt?: number

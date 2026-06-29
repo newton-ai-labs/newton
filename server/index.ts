@@ -733,11 +733,21 @@ async function buildSystemPrompt(req: ChatRequest): Promise<string> {
     'Be concise, correct, and practical. Use Markdown. Use fenced code blocks with language tags. ' +
     'When the user references "this file" or "my code", use the active file context. ' +
     'When the user asks about the codebase, use the relevant code context provided below. ' +
-    '\n\nIMPORTANT — Apply-from-chat: When you produce code that is meant to be saved as a complete file or a complete replacement for an existing file, ' +
+    '\n\nIMPORTANT — Apply-from-chat formats:' +
+    '\n\nFOR MODIFICATIONS to existing files, STRONGLY PREFER the SEARCH/REPLACE block format. ' +
+    'Emit one fenced code block per change, with this exact structure inside the fence:' +
+    '\n  <relative/path/to/file>\n  <<<<<<< SEARCH\n  <exact existing text to find>\n  =======\n  <new text to replace with>\n  >>>>>>> REPLACE' +
+    '\nRules for SEARCH/REPLACE:' +
+    '\n  • The SEARCH block MUST match the file EXACTLY ONCE, character-for-character including whitespace.' +
+    '\n  • Include 1-3 lines of context above/below the changed lines so the SEARCH block is unique.' +
+    '\n  • Keep blocks small — one logical change per block. Multiple blocks (same or different files) ' +
+    'can appear in one response, each in its own code fence.' +
+    '\n  • Do NOT include `// filepath:` when using SEARCH/REPLACE — the path goes on its own line right before SEARCH.' +
+    '\n\nFOR COMPLETE NEW FILES (or rare full-file rewrites), use the file-annotation format: ' +
     'prepend a comment annotation on the FIRST line of the code block with the target file path, using the syntax the target language uses for comments: ' +
     'e.g. `// filepath: src/utils/debounce.ts` for JS/TS, `# filepath: main.py` for Python, `<!-- filepath: index.html -->` for HTML/XML, etc. ' +
-    'Only add this annotation for complete, ready-to-apply files — NOT for short illustrative snippets. ' +
-    'Prefer relative paths from the project root. The user can edit the path before applying.'
+    'Only use this for complete, ready-to-write files — never for partial changes to an existing file. ' +
+    'Prefer relative paths from the project root.'
 
   let context = base
 
@@ -1039,7 +1049,53 @@ app.post('/api/edit', sensitiveLimiter, async (req, res) => {
  * Determines URL, headers, body shape, and response extraction automatically
  * from the provider registry. Works for any provider.
  */
-async function llmComplete(provider: ProviderConfig, system: string, user: string): Promise<string> {
+/** Detect "max_tokens too high" errors so we can retry with a lower cap. */
+function isMaxTokensError(msg: string): boolean {
+  const m = msg.toLowerCase()
+  return (
+    m.includes('max_tokens') ||
+    m.includes('max tokens') ||
+    m.includes('output token') ||
+    m.includes('output length')
+  )
+}
+
+async function llmComplete(
+  provider: ProviderConfig,
+  system: string,
+  user: string,
+  opts: { maxTokens?: number; jsonMode?: boolean } = {},
+): Promise<string> {
+  // If a high cap is requested, attempt it but step down on provider rejection.
+  // Many models cap at 4096 or 8192; we don't have a per-model table, so adapt
+  // by retrying with progressively lower values until the provider accepts.
+  const requested = opts.maxTokens ?? 4096
+  const ladder = requested > 4096
+    ? Array.from(new Set([requested, 8192, 4096])).filter((n) => n <= requested)
+    : [requested]
+  let lastErr: Error | null = null
+  for (const cap of ladder) {
+    try {
+      return await llmCompleteOnce(provider, system, user, cap, opts.jsonMode ?? false)
+    } catch (e) {
+      lastErr = e as Error
+      if (cap > 4096 && isMaxTokensError(lastErr.message)) {
+        // Provider rejected this cap — try the next one down.
+        continue
+      }
+      throw e
+    }
+  }
+  throw lastErr ?? new Error('llmComplete failed with no error captured')
+}
+
+async function llmCompleteOnce(
+  provider: ProviderConfig,
+  system: string,
+  user: string,
+  maxTokens: number,
+  jsonMode: boolean,
+): Promise<string> {
   const def = getProviderDef(provider.provider)
   const proto = getProtocol(provider.provider)
   const baseUrl = (provider.baseUrl || def?.defaultBaseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
@@ -1052,10 +1108,29 @@ async function llmComplete(provider: ProviderConfig, system: string, user: strin
     url = `${baseUrl}/v1/messages`
     headers['x-api-key'] = provider.apiKey!
     headers['anthropic-version'] = '2023-06-01'
-    bodyObj = { model: provider.model, max_tokens: 4096, system, messages: [{ role: 'user', content: user }], stream: false }
+    bodyObj = { model: provider.model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: user }], stream: false }
   } else if (proto === 'ollama') {
     url = `${baseUrl}/api/chat`
-    bodyObj = { model: provider.model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], stream: false }
+    // Ollama defaults num_ctx to 2048 tokens — far too small for any real
+    // planning prompt (system + workspace files + attached file contents +
+    // output budget). Size num_ctx to fit prompt + output with headroom,
+    // floored at 16384 so chat/completion calls don't force a context-window
+    // change and trigger a model reload between calls. ~4 chars/token.
+    const approxInputTokens = Math.ceil((system.length + user.length) / 4)
+    const needed = approxInputTokens + maxTokens + 1024
+    const ladder = [16384, 32768, 65536, 131072]
+    const num_ctx = ladder.find((n) => n >= needed) ?? 131072
+    const ollamaBody: any = {
+      model: provider.model,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      stream: false,
+      options: { num_predict: maxTokens, num_ctx },
+    }
+    // JSON-mode: forces the model to emit valid JSON. Only set when the
+    // caller is asking for structured output — for chat/completion calls
+    // it would mangle prose responses.
+    if (jsonMode) ollamaBody.format = 'json'
+    bodyObj = ollamaBody
   } else {
     // openai-compat (OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Together, xAI, Gemini, …)
     url = `${baseUrl}/chat/completions`
@@ -1064,7 +1139,14 @@ async function llmComplete(provider: ProviderConfig, system: string, user: strin
       headers['HTTP-Referer'] = 'https://github.com/newton-editor'
       headers['X-Title'] = 'Newton Editor'
     }
-    bodyObj = { model: provider.model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], stream: false, temperature: 0.2 }
+    bodyObj = {
+      model: provider.model,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      stream: false,
+      temperature: 0.2,
+      max_tokens: maxTokens,
+    }
+    if (jsonMode) bodyObj.response_format = { type: 'json_object' }
   }
 
   const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(bodyObj) })
@@ -2799,13 +2881,208 @@ app.post('/api/missions', async (req, res) => {
     if (p.provider === 'demo') {
       plan = demoMissionPlan(goal.trim())
     } else {
+      // Build planner context in four layers (Cursor/Aider-style):
+      //   A. Repo map — every file + top-level symbols, always included.
+      //      Cheap orientation: LLM sees what exists even if not attached.
+      //   B. Goal-keyword path boost — rank files whose path matches goal
+      //      tokens (e.g. goal mentions "settings" → SettingsModal.tsx).
+      //   C. Import-graph expansion — files that import or are imported by
+      //      the top-K picks come along for the ride (catches integration).
+      //   D. Whole-repo mode — if total code is small, just send everything.
+      //
+      // All four feed into a single byte budget for attached file CONTENTS.
+      const stats = index.getStats()
+      if (stats.totalFiles === 0 && !stats.indexing) {
+        try { await index.index() } catch { /* indexer is best-effort */ }
+      }
+      const workspaceFiles = Array.from(((index as unknown as { filePaths: Set<string> }).filePaths) ?? []).sort()
+
+      // Layer A: repo map (always included, separate budget from contents).
+      const repoMap = index.getRepoMap(25_000)
+      // Semantic excerpts retained as a tertiary signal.
+      const relevantContext = index.getContextForQuery(goal.trim(), 6000)
+
+      const ATTACHED_CONTENT_BUDGET = 80_000 // ~20k tokens
+      const PER_FILE_LIMIT = 50_000
+      const attachedContents: Array<{ path: string; content: string }> = []
+      const seenPaths = new Set<string>()
+      let consumed = 0
+
+      const tryAttach = async (rel: string): Promise<boolean> => {
+        if (seenPaths.has(rel)) return false
+        if (consumed >= ATTACHED_CONTENT_BUDGET) return false
+        try {
+          const abs = safeResolve(WORKSPACE, rel)
+          const content = await fs.readFile(abs, 'utf8')
+          if (content.length > PER_FILE_LIMIT) return false
+          if (consumed + content.length > ATTACHED_CONTENT_BUDGET) return false
+          attachedContents.push({ path: rel, content })
+          seenPaths.add(rel)
+          consumed += content.length
+          return true
+        } catch { return false }
+      }
+
+      // Layer D: whole-repo mode. If the workspace's text-file total is
+      // small enough to fit, just attach everything and skip ranking.
+      const WHOLE_REPO_THRESHOLD = 150_000 // ~37k tokens of code
+      let totalSize = 0
+      for (const rel of workspaceFiles) {
+        try {
+          const abs = safeResolve(WORKSPACE, rel)
+          const st = await fs.stat(abs)
+          if (st.size <= PER_FILE_LIMIT) totalSize += st.size
+        } catch { /* skip */ }
+        if (totalSize > WHOLE_REPO_THRESHOLD) break
+      }
+      const wholeRepoMode = totalSize > 0 && totalSize <= WHOLE_REPO_THRESHOLD
+
+      if (wholeRepoMode) {
+        for (const rel of workspaceFiles) await tryAttach(rel)
+      } else {
+        // User-attached focus files come first, always.
+        for (const cf of contextFiles ?? []) await tryAttach(cf)
+
+        // Layer B: goal-keyword path-match scoring.
+        const goalTokens = goal.trim().toLowerCase()
+          .replace(/([a-z])([A-Z])/g, '$1 $2')
+          .split(/[^a-z0-9]+/)
+          .filter((t) => t.length >= 3)
+        const goalTokenSet = new Set(goalTokens)
+        const pathScores = new Map<string, number>()
+        for (const rel of workspaceFiles) {
+          const pathTokens = rel.toLowerCase()
+            .replace(/([a-z])([A-Z])/g, '$1 $2')
+            .split(/[^a-z0-9]+/)
+          let score = 0
+          for (const t of pathTokens) if (goalTokenSet.has(t)) score++
+          if (score > 0) pathScores.set(rel, score)
+        }
+        const pathRanked = [...pathScores.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([rel]) => rel)
+
+        // Semantic-search hits (existing behavior).
+        const hits = index.search(goal.trim(), 30)
+        const semanticRanked: string[] = []
+        const seenSem = new Set<string>()
+        for (const h of hits) {
+          const p = h.chunk.filePath
+          if (!seenSem.has(p)) { seenSem.add(p); semanticRanked.push(p) }
+        }
+
+        // Merge: interleave path-match and semantic rankings so each gets
+        // representation in the top-N. Dedupe naturally via tryAttach.
+        const merged: string[] = []
+        for (let i = 0; i < Math.max(pathRanked.length, semanticRanked.length); i++) {
+          if (i < pathRanked.length) merged.push(pathRanked[i])
+          if (i < semanticRanked.length) merged.push(semanticRanked[i])
+        }
+        const initialPicks: string[] = []
+        for (const rel of merged) {
+          if (await tryAttach(rel)) initialPicks.push(rel)
+        }
+
+        // Layer C: import-graph expansion. Pull files that import or are
+        // imported by the initial picks. The graph is best-effort — if it
+        // hasn't been built yet, skip silently.
+        try {
+          const builder = getGraphBuilder(WORKSPACE)
+          await builder.build()
+          const graph = builder.getGraph()
+          if (graph) {
+            const neighbors = new Set<string>()
+            for (const e of graph.edges) {
+              if (initialPicks.includes(e.source)) neighbors.add(e.target)
+              if (initialPicks.includes(e.target)) neighbors.add(e.source)
+            }
+            for (const rel of neighbors) await tryAttach(rel)
+          }
+        } catch { /* graph is optional */ }
+      }
+
       try {
-        const complete = (sys: string, user: string) => llmComplete(p, sys, user)
-        plan = await llmMissionPlan(goal.trim(), contextFiles ?? [], complete)
+        // Mission planning may need to emit full file contents for several
+        // edits in a single response; give it a generous output budget and
+        // ask for JSON mode where supported (Ollama, OpenAI).
+        const complete = (sys: string, user: string) =>
+          llmComplete(p, sys, user, { maxTokens: 16384, jsonMode: true })
+        plan = await llmMissionPlan(
+          goal.trim(),
+          contextFiles ?? [],
+          complete,
+          workspaceFiles,
+          relevantContext,
+          attachedContents,
+          repoMap,
+        )
       } catch (e) {
-        // fall back to demo plan
-        plan = demoMissionPlan(goal.trim())
-        plan.summary += ` (LLM planning failed: ${(e as Error).message}; using heuristic fallback.)`
+        // Surface the real error — do not silently fall back to a heuristic
+        // planner that produces no file edits. Mark the mission failed so the
+        // UI can show the actual reason.
+        updateMission(mission.id, { status: 'failed', phase: 'plan', summary: `Planner failed: ${(e as Error).message}` })
+        return res.status(502).json({
+          error: `LLM planner failed: ${(e as Error).message}`,
+          missionId: mission.id,
+        })
+      }
+
+      // Validate the plan upfront, before any execution. Catches the two
+      // failure modes weaker models keep producing:
+      //   1) edit/delete targeting a path that doesn't exist in the workspace
+      //      (hallucinated paths like "settings.json" when none exists)
+      //   2) edit/create with no `after` content (the LLM ignored the rule)
+      // Either is a plan-level error — fail loud so the user sees the real
+      // reason instead of partial execution with confusing per-step errors.
+      const workspaceSet = new Set(workspaceFiles)
+      const planProblems: string[] = []
+      for (const s of plan.steps) {
+        if (!s.action || !s.path) {
+          planProblems.push(`step "${s.description}" has no action+path`)
+          continue
+        }
+        if ((s.action === 'edit' || s.action === 'delete' || s.action === 'patch') && !workspaceSet.has(s.path)) {
+          planProblems.push(
+            `${s.action} step targets "${s.path}", which does not exist in the workspace ` +
+            `(${workspaceFiles.length} files indexed). The model hallucinated this path.`,
+          )
+        }
+        if ((s.action === 'edit' || s.action === 'create') && (typeof s.after !== 'string' || s.after.length === 0)) {
+          planProblems.push(
+            `${s.action} step for "${s.path}" has no \`after\` content. The model did not ` +
+            `provide the file contents to write.`,
+          )
+        }
+        if (s.action === 'patch' && (!Array.isArray(s.edits) || s.edits.length === 0)) {
+          planProblems.push(
+            `patch step for "${s.path}" has no edits. The model needs to provide ` +
+            `at least one {find, replace} pair.`,
+          )
+        }
+        if (s.action === 'patch' && Array.isArray(s.edits)) {
+          for (let i = 0; i < s.edits.length; i++) {
+            const e = s.edits[i]
+            if (!e.find || e.find.length === 0) {
+              planProblems.push(`patch step for "${s.path}" edit ${i + 1}: empty find string`)
+            }
+          }
+        }
+      }
+      const actionable = plan.steps.filter((s) => s.action && s.path)
+      if (actionable.length === 0) {
+        updateMission(mission.id, { status: 'failed', phase: 'plan', summary: 'Planner returned no actionable steps.' })
+        return res.status(502).json({
+          error: 'LLM planner returned no actionable steps (no action+path). Try a more specific goal or check your model.',
+          missionId: mission.id,
+        })
+      }
+      if (planProblems.length > 0) {
+        const reason = `Plan rejected — ${planProblems.length} problem(s):\n  • ${planProblems.join('\n  • ')}`
+        updateMission(mission.id, { status: 'failed', phase: 'plan', summary: reason })
+        return res.status(502).json({
+          error: reason + '\n\nThis usually means the model is too small for full-file edits. Try a stronger model (e.g. Claude Sonnet, GPT-4o) or attach the target file as context.',
+          missionId: mission.id,
+        })
       }
     }
 
@@ -2924,24 +3201,20 @@ app.post('/api/missions/:id/execute', async (req, res) => {
       send({ type: 'step', index: i, status: 'running', description: step.description })
 
       try {
-        // Generate agent plan for this step
-        const agentReq = { task: step.description, files, provider: p }
-        let agentPlan
-        if (p.provider === 'demo') {
-          agentPlan = demoPlan(agentReq)
-        } else {
-          try {
-            agentPlan = await llmPlan(agentReq, complete)
-          } catch {
-            agentPlan = demoPlan(agentReq)
+        // Fast path: step already carries a typed action from the planner.
+        // Run it directly — no second-tier re-planning, no signal loss.
+        if (step.action && step.path) {
+          const agentStep = {
+            id: `${step.id}-action`,
+            action: step.action,
+            path: step.path,
+            description: step.description,
+            status: 'pending' as const,
+            before: step.before,
+            after: step.after,
+            edits: step.edits,
           }
-        }
-
-        // Execute each agent step
-        const executedAgentSteps = []
-        for (const agentStep of agentPlan.steps) {
           const executed = await executeStep(agentStep)
-          executedAgentSteps.push(executed)
           send({
             type: 'agent_step',
             missionStepIndex: i,
@@ -2951,26 +3224,84 @@ app.post('/api/missions/:id/execute', async (req, res) => {
             note: executed.note,
           })
 
-          // Update files array if we created/edited a file
-          if (executed.status === 'done' && (executed.action === 'create' || executed.action === 'edit')) {
+          if (executed.status === 'done' && (executed.action === 'create' || executed.action === 'edit' || executed.action === 'patch')) {
             const existing = files.findIndex((f) => f.path === executed.path)
-            if (existing >= 0) {
-              files[existing].content = executed.after ?? ''
-            } else {
-              files.push({ path: executed.path, content: executed.after ?? '' })
+            if (existing >= 0) files[existing].content = executed.after ?? ''
+            else files.push({ path: executed.path, content: executed.after ?? '' })
+          }
+
+          updatedSteps[i] = {
+            ...step,
+            status: executed.status === 'done' ? 'done' : executed.status === 'skipped' ? 'skipped' : 'error',
+            completedAt: Date.now(),
+            agentSteps: [executed],
+            note: executed.note,
+            before: executed.before ?? step.before,
+          }
+          send({
+            type: 'step',
+            index: i,
+            status: updatedSteps[i].status,
+            description: step.description,
+            note: executed.note,
+          })
+        } else {
+          // Legacy / demo fallback: re-plan this step via agent and execute
+          // each produced action.
+          const agentReq = { task: step.description, files, provider: p }
+          let agentPlan
+          if (p.provider === 'demo') {
+            agentPlan = demoPlan(agentReq)
+          } else {
+            // Real providers should have produced typed steps already; if we
+            // get here it's a bug in the planner. Surface it instead of
+            // silently doing nothing.
+            try {
+              agentPlan = await llmPlan(agentReq, complete)
+            } catch (e) {
+              throw new Error(`Mission step "${step.description}" had no action and re-planning failed: ${(e as Error).message}`)
             }
           }
-        }
 
-        // Mark step as done
-        updatedSteps[i] = {
-          ...step,
-          status: 'done',
-          completedAt: Date.now(),
-          agentSteps: executedAgentSteps,
-          note: agentPlan.summary,
+          const executedAgentSteps = []
+          for (const agentStep of agentPlan.steps) {
+            const executed = await executeStep(agentStep)
+            executedAgentSteps.push(executed)
+            send({
+              type: 'agent_step',
+              missionStepIndex: i,
+              action: executed.action,
+              path: executed.path,
+              status: executed.status,
+              note: executed.note,
+            })
+            if (executed.status === 'done' && (executed.action === 'create' || executed.action === 'edit')) {
+              const existing = files.findIndex((f) => f.path === executed.path)
+              if (existing >= 0) files[existing].content = executed.after ?? ''
+              else files.push({ path: executed.path, content: executed.after ?? '' })
+            }
+          }
+
+          // Step is done only if it actually did something AND nothing errored.
+          const anyError = executedAgentSteps.some((s) => s.status === 'error')
+          const anyDone = executedAgentSteps.some((s) => s.status === 'done')
+          const stepStatus = anyError ? 'error' : anyDone ? 'done' : 'skipped'
+
+          // For error/skipped steps, surface the underlying agent-step note
+          // (not just the planner's summary) so the user sees the real reason.
+          const errNote = executedAgentSteps.find((s) => s.status === 'error')?.note
+          const skipNote = executedAgentSteps.find((s) => s.status === 'skipped')?.note
+          const stepNote = anyError ? errNote : !anyDone ? skipNote : agentPlan.summary
+
+          updatedSteps[i] = {
+            ...step,
+            status: stepStatus,
+            completedAt: Date.now(),
+            agentSteps: executedAgentSteps,
+            note: stepNote,
+          }
+          send({ type: 'step', index: i, status: stepStatus, description: step.description, note: stepNote })
         }
-        send({ type: 'step', index: i, status: 'done', description: step.description })
       } catch (e) {
         updatedSteps[i] = {
           ...step,
@@ -2984,11 +3315,12 @@ app.post('/api/missions/:id/execute', async (req, res) => {
       updateMission(mission.id, { steps: updatedSteps })
     }
 
-    // All steps done - move to verify phase
-    const allDone = updatedSteps.every((s) => s.status === 'done')
+    // All steps done — move to verify phase only if every step actually
+    // succeeded. Otherwise mark failed so the UI doesn't claim success.
+    const allDone = updatedSteps.every((s) => s.status === 'done' || s.status === 'skipped')
     const final = updateMission(mission.id, {
       steps: updatedSteps,
-      phase: 'verify',
+      phase: allDone ? 'verify' : 'report',
       status: allDone ? 'running' : 'failed',
     })
     send({ type: 'complete', mission: final })

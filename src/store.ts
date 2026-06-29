@@ -15,6 +15,39 @@ import {
 // ---------- constants ----------
 const TOAST_DURATION_MS = 2600
 
+// ---------- SEARCH/REPLACE patch parsing (Aider-style) ----------
+/**
+ * Parse Aider-style SEARCH/REPLACE blocks out of a code chunk.
+ *
+ * Expected per-block shape (newlines required as shown):
+ *   <relative/path>
+ *   <<<<<<< SEARCH
+ *   <text to find — must match file exactly>
+ *   =======
+ *   <text to replace with>
+ *   >>>>>>> REPLACE
+ *
+ * Multiple blocks can be concatenated. Returns [] if none are found.
+ */
+export interface PatchBlock { path: string; find: string; replace: string }
+export function parsePatchBlocks(code: string): PatchBlock[] {
+  const blocks: PatchBlock[] = []
+  // Use a regex spanning the whole pattern. The path is the line immediately
+  // before `<<<<<<< SEARCH`. SEARCH/REPLACE bodies are everything between the
+  // markers, exclusive of leading/trailing newlines added by the format.
+  const re = /(^|\n)([^\n]+)\n<{7} SEARCH\n([\s\S]*?)\n={7}\n([\s\S]*?)\n>{7} REPLACE/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(code)) !== null) {
+    const path = m[2].trim()
+    if (!path) continue
+    blocks.push({ path, find: m[3], replace: m[4] })
+  }
+  return blocks
+}
+export function codeHasPatchBlocks(code: string): boolean {
+  return /\n<{7} SEARCH\n/.test('\n' + code)
+}
+
 // ---------- types ----------
 export interface EditorTab {
   id: string
@@ -573,11 +606,91 @@ export const useStore = create<NewtonState>((set, get) => ({
 
   applyCodeToFile: async (path, content) => {
     const cleanPath = path.trim()
-    if (!cleanPath) {
+    if (!cleanPath && !codeHasPatchBlocks(content)) {
       get().toast('No file path')
       return
     }
     try {
+      // SEARCH/REPLACE patch path: detect Aider-style blocks in the code and
+      // apply each surgically. Path comes from each block, so `cleanPath` is
+      // ignored when blocks are present.
+      const blocks = parsePatchBlocks(content)
+      if (blocks.length > 0) {
+        let applied = 0
+        const failures: string[] = []
+        for (const b of blocks) {
+          try {
+            const existingRes = await fetch(`/api/file?path=${encodeURIComponent(b.path)}`)
+            if (!existingRes.ok) {
+              failures.push(`${b.path}: file not found`)
+              continue
+            }
+            const { content: existing } = (await existingRes.json()) as { content: string }
+            // Count exact matches of the SEARCH text.
+            let count = 0, from = 0, idx: number
+            while ((idx = existing.indexOf(b.find, from)) !== -1) {
+              count++; from = idx + b.find.length
+              if (count > 1) break
+            }
+            if (count === 0) {
+              failures.push(`${b.path}: SEARCH block not found in file`)
+              continue
+            }
+            if (count > 1) {
+              failures.push(`${b.path}: SEARCH block matches ${count}+ places — add more context to make it unique`)
+              continue
+            }
+            const updated = existing.replace(b.find, () => b.replace)
+            await fetch('/api/file', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: b.path, content: updated }),
+            })
+            applied++
+            // Update open-tab content if applicable
+            const tab = get().tabs.find((t) => t.path === b.path)
+            if (tab) {
+              set((s) => ({
+                tabs: s.tabs.map((t) =>
+                  t.id === tab.id ? { ...t, content: updated, savedContent: updated } : t,
+                ),
+              }))
+            }
+          } catch (e) {
+            failures.push(`${b.path}: ${(e as Error).message}`)
+          }
+        }
+        await get().refreshTree()
+        if (failures.length === 0) {
+          get().toast(`Applied ${applied} patch${applied === 1 ? '' : 'es'}`)
+        } else {
+          get().toast(`Applied ${applied}/${blocks.length}; failed: ${failures.join('; ')}`)
+        }
+        return
+      }
+
+      // Full-file path (legacy): guard against snippet-clobber.
+      try {
+        const existingRes = await fetch(`/api/file?path=${encodeURIComponent(cleanPath)}`)
+        if (existingRes.ok) {
+          const { content: existing } = (await existingRes.json()) as { content: string }
+          if (existing && existing.length > 200) {
+            const ratio = content.length / existing.length
+            if (ratio < 0.25) {
+              const proceed = typeof window !== 'undefined' && window.confirm(
+                `Apply would replace ${cleanPath} (${existing.length} chars) with much smaller ` +
+                `content (${content.length} chars, ratio ${ratio.toFixed(2)}).\n\n` +
+                `The AI likely emitted a snippet, not the full file. Overwrite anyway?`,
+              )
+              if (!proceed) {
+                get().toast(`Apply cancelled: snippet would clobber ${cleanPath}`)
+                return
+              }
+            }
+          }
+        }
+      } catch { /* file probably doesn't exist yet — fall through to write */ }
+
       // Write to disk (creates or overwrites)
       await fetch('/api/file', {
         method: 'POST',
@@ -1364,7 +1477,11 @@ export const useStore = create<NewtonState>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ goal: trimmed, contextFiles, provider: cfg }),
       })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      if (!r.ok) {
+        // Try to surface the server's actual error reason instead of a bare HTTP code.
+        const reason = await r.json().then((j: any) => j?.error).catch(() => null)
+        throw new Error(reason ? `HTTP ${r.status}: ${reason}` : `HTTP ${r.status}`)
+      }
       const mission = (await r.json()) as Mission
       set((s) => ({
         missions: [mission, ...s.missions.filter((m) => m.id !== mission.id)],
@@ -1412,9 +1529,15 @@ export const useStore = create<NewtonState>((set, get) => ({
             try {
               const data = JSON.parse(line.slice(6))
               if (data.type === 'step') {
-                get().toast(`Step ${data.index + 1}: ${data.status}`)
+                if (data.status === 'error' && data.note) {
+                  get().toast(`Step ${data.index + 1} error: ${String(data.note).slice(0, 200)}`)
+                } else {
+                  get().toast(`Step ${data.index + 1}: ${data.status}`)
+                }
               } else if (data.type === 'agent_step' && data.status === 'done') {
                 get().toast(`${data.action} ${data.path}`)
+              } else if (data.type === 'agent_step' && data.status === 'error' && data.note) {
+                get().toast(`${data.action ?? 'action'} ${data.path ?? ''} failed: ${String(data.note).slice(0, 200)}`)
               } else if (data.type === 'complete' && data.mission) {
                 set((s) => ({
                   missions: s.missions.map((m) => (m.id === id ? data.mission : m)),
