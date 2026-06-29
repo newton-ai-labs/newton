@@ -24,7 +24,7 @@ import type { Mission, MissionStep, MissionOutcome } from '../../shared/types'
 const PHASE_LABEL: Record<string, string> = {
   understand: 'Understand',
   plan: 'Planning',
-  execute: 'Executing',
+  execute: 'Planned', // Ready for execution
   verify: 'Verifying',
   report: 'Reporting',
 }
@@ -70,6 +70,7 @@ export default function MissionPanel() {
   const settings = useStore((s) => s.settings)
   const loadMissions = useStore((s) => s.loadMissions)
   const startMission = useStore((s) => s.startMission)
+  const executeMission = useStore((s) => s.executeMission)
   const patchMission = useStore((s) => s.patchMission)
   const removeMission = useStore((s) => s.removeMission)
   const verifyMission = useStore((s) => s.verifyMission)
@@ -398,24 +399,18 @@ export default function MissionPanel() {
                     )}
 
                     {/* controls */}
-                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      {m.status === 'running' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                      {m.steps.some((s) => s.status === 'pending') && m.status !== 'cancelled' && (
                         <button
                           className="mini-btn"
-                          style={ctrlBtnStyle}
-                          onClick={() => patchMission(m.id, { status: 'paused' })}
+                          style={{ ...ctrlBtnStyle, background: 'var(--blue)', color: '#fff' }}
+                          onClick={() => executeMission(m.id)}
+                          disabled={busy}
+                          title="Auto-execute all pending steps"
                         >
-                          <Pause size={12} /> Pause
+                          <Rocket size={12} /> Execute
                         </button>
-                      ) : m.status === 'paused' ? (
-                        <button
-                          className="mini-btn"
-                          style={ctrlBtnStyle}
-                          onClick={() => patchMission(m.id, { status: 'running' })}
-                        >
-                          <Play size={12} /> Resume
-                        </button>
-                      ) : null}
+                      )}
                       {m.outcomes.length > 0 && (
                         <button
                           className="mini-btn"
@@ -427,6 +422,24 @@ export default function MissionPanel() {
                           <Beaker size={12} /> Verify
                         </button>
                       )}
+                      {m.status === 'running' && (
+                        <button
+                          className="mini-btn"
+                          style={ctrlBtnStyle}
+                          onClick={() => patchMission(m.id, { status: 'paused' })}
+                        >
+                          <Pause size={12} /> Pause
+                        </button>
+                      )}
+                      {m.status === 'paused' && (
+                        <button
+                          className="mini-btn"
+                          style={ctrlBtnStyle}
+                          onClick={() => patchMission(m.id, { status: 'running' })}
+                        >
+                          <Play size={12} /> Resume
+                        </button>
+                      )}
                       {m.status !== 'cancelled' && m.status !== 'done' && (
                         <button
                           className="mini-btn"
@@ -436,9 +449,10 @@ export default function MissionPanel() {
                           <Square size={12} /> Cancel
                         </button>
                       )}
+                      <div style={{ flex: 1 }} />
                       <button
                         className="mini-btn"
-                        style={{ ...ctrlBtnStyle, marginLeft: 'auto', color: 'var(--red, #f07178)' }}
+                        style={{ ...ctrlBtnStyle, color: 'var(--red, #f07178)' }}
                         onClick={() => removeMission(m.id)}
                         title="Delete mission"
                       >
@@ -523,9 +537,9 @@ const badgeStyle: React.CSSProperties = {
 const ctrlBtnStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 4,
+  gap: 6,
   fontSize: 11,
-  padding: '3px 8px',
+  padding: '5px 12px',
   borderRadius: 5,
 }
 

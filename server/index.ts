@@ -2877,6 +2877,129 @@ app.post('/api/missions/:id/verify', async (req, res) => {
   }
 })
 
+/** Execute a mission's steps automatically via the agent. */
+app.post('/api/missions/:id/execute', async (req, res) => {
+  const { provider } = req.body as { provider?: ProviderConfig }
+  const mission = getMission(req.params.id)
+  if (!mission) return res.status(404).json({ error: 'not found' })
+
+  // Set up SSE for progress updates
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+
+  const send = (data: any) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`)
+  }
+
+  try {
+    // Mark mission as running
+    updateMission(mission.id, { status: 'running', phase: 'execute' })
+    send({ type: 'status', status: 'running', phase: 'execute' })
+
+    const p = provider ?? { provider: 'demo', model: 'demo' }
+    const complete = (sys: string, user: string) => llmComplete(p, sys, user)
+
+    // Get workspace files for context
+    const files: Array<{ path: string; content: string }> = []
+    for (const cf of mission.contextFiles) {
+      try {
+        const abs = safeResolve(WORKSPACE, cf)
+        const content = await fs.readFile(abs, 'utf8')
+        files.push({ path: cf, content })
+      } catch {
+        /* skip inaccessible files */
+      }
+    }
+
+    // Execute each pending step
+    const updatedSteps = [...mission.steps]
+    for (let i = 0; i < updatedSteps.length; i++) {
+      const step = updatedSteps[i]
+      if (step.status !== 'pending') continue
+
+      // Mark step as running
+      updatedSteps[i] = { ...step, status: 'running', startedAt: Date.now() }
+      updateMission(mission.id, { steps: updatedSteps })
+      send({ type: 'step', index: i, status: 'running', description: step.description })
+
+      try {
+        // Generate agent plan for this step
+        const agentReq = { task: step.description, files, provider: p }
+        let agentPlan
+        if (p.provider === 'demo') {
+          agentPlan = demoPlan(agentReq)
+        } else {
+          try {
+            agentPlan = await llmPlan(agentReq, complete)
+          } catch {
+            agentPlan = demoPlan(agentReq)
+          }
+        }
+
+        // Execute each agent step
+        const executedAgentSteps = []
+        for (const agentStep of agentPlan.steps) {
+          const executed = await executeStep(agentStep)
+          executedAgentSteps.push(executed)
+          send({
+            type: 'agent_step',
+            missionStepIndex: i,
+            action: executed.action,
+            path: executed.path,
+            status: executed.status,
+            note: executed.note,
+          })
+
+          // Update files array if we created/edited a file
+          if (executed.status === 'done' && (executed.action === 'create' || executed.action === 'edit')) {
+            const existing = files.findIndex((f) => f.path === executed.path)
+            if (existing >= 0) {
+              files[existing].content = executed.after ?? ''
+            } else {
+              files.push({ path: executed.path, content: executed.after ?? '' })
+            }
+          }
+        }
+
+        // Mark step as done
+        updatedSteps[i] = {
+          ...step,
+          status: 'done',
+          completedAt: Date.now(),
+          agentSteps: executedAgentSteps,
+          note: agentPlan.summary,
+        }
+        send({ type: 'step', index: i, status: 'done', description: step.description })
+      } catch (e) {
+        updatedSteps[i] = {
+          ...step,
+          status: 'error',
+          completedAt: Date.now(),
+          note: (e as Error).message,
+        }
+        send({ type: 'step', index: i, status: 'error', error: (e as Error).message })
+      }
+
+      updateMission(mission.id, { steps: updatedSteps })
+    }
+
+    // All steps done - move to verify phase
+    const allDone = updatedSteps.every((s) => s.status === 'done')
+    const final = updateMission(mission.id, {
+      steps: updatedSteps,
+      phase: 'verify',
+      status: allDone ? 'running' : 'failed',
+    })
+    send({ type: 'complete', mission: final })
+    res.end()
+  } catch (e) {
+    send({ type: 'error', error: (e as Error).message })
+    updateMission(mission.id, { status: 'failed' })
+    res.end()
+  }
+})
+
 // ---------- health ----------
 app.get('/api/health', (_req, res) => {
   res.json({

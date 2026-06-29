@@ -216,6 +216,7 @@ interface NewtonState {
   missionBusy: boolean
   loadMissions: () => Promise<void>
   startMission: (goal: string, contextFiles?: string[]) => Promise<Mission | null>
+  executeMission: (id: string) => Promise<void>
   refreshMission: (id: string) => Promise<void>
   patchMission: (id: string, patch: Partial<Mission>) => Promise<void>
   removeMission: (id: string) => Promise<void>
@@ -1376,6 +1377,64 @@ export const useStore = create<NewtonState>((set, get) => ({
       set({ missionBusy: false })
       get().toast(`Mission start failed: ${(e as Error).message}`)
       return null
+    }
+  },
+
+  executeMission: async (id) => {
+    set({ missionBusy: true })
+    get().toast('Executing mission...')
+    try {
+      const cfg = providerConfig(get().settings)
+      const r = await fetch(`/api/missions/${id}/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: cfg }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+
+      // Read SSE stream for progress updates
+      const reader = r.body?.getReader()
+      if (!reader) throw new Error('No response body')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (data.type === 'step') {
+                get().toast(`Step ${data.index + 1}: ${data.status}`)
+              } else if (data.type === 'agent_step' && data.status === 'done') {
+                get().toast(`${data.action} ${data.path}`)
+              } else if (data.type === 'complete' && data.mission) {
+                set((s) => ({
+                  missions: s.missions.map((m) => (m.id === id ? data.mission : m)),
+                  activeMission: s.activeMission?.id === id ? data.mission : s.activeMission,
+                }))
+              }
+            } catch {
+              /* ignore parse errors */
+            }
+          }
+        }
+      }
+
+      // Refresh the mission state
+      await get().refreshMission(id)
+      set({ missionBusy: false })
+      get().toast('Mission execution complete')
+    } catch (e) {
+      set({ missionBusy: false })
+      get().toast(`Execute failed: ${(e as Error).message}`)
     }
   },
 
