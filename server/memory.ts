@@ -54,10 +54,35 @@ function memoryPath(workspace: string): string {
   return path.join(workspace, MEMORY_DIR, MEMORY_FILE)
 }
 
+/**
+ * Runtime validation of a parsed memory object. JSON.parse can return any
+ * shape (an array, a number, an object missing required keys, or fields of
+ * the wrong type) — blindly casting it to WorkspaceMemory and using it later
+ * causes confusing downstream crashes. This guard verifies the minimum shape
+ * loadMemory relies on so callers can safely treat the result as memory.
+ */
+function isWorkspaceMemory(value: unknown): value is WorkspaceMemory {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const v = value as Record<string, unknown>
+  if (typeof v.version !== 'number') return false
+  if (typeof v.workspaceName !== 'string') return false
+  if (typeof v.createdAt !== 'string') return false
+  if (typeof v.lastVisited !== 'string') return false
+  if (typeof v.visitCount !== 'number') return false
+  if (!Array.isArray(v.techStack)) return false
+  if (!Array.isArray(v.entries)) return false
+  if (!Array.isArray(v.openTasks)) return false
+  if (!Array.isArray(v.recentFiles)) return false
+  if (v.digest !== null && (typeof v.digest !== 'object' || Array.isArray(v.digest))) return false
+  return true
+}
+
 export async function loadMemory(workspace: string): Promise<WorkspaceMemory | null> {
   try {
     const raw = await fs.readFile(memoryPath(workspace), 'utf8')
-    return JSON.parse(raw) as WorkspaceMemory
+    const parsed: unknown = JSON.parse(raw)
+    if (!isWorkspaceMemory(parsed)) return null
+    return parsed
   } catch {
     return null
   }
@@ -323,6 +348,16 @@ async function computeDigest(workspace: string): Promise<WorkspaceMemory['digest
   }
 }
 
+// ---------- extension → language map ----------
+/**
+ * Maps file extensions to human-readable language names for digest stats.
+ *
+ * NOTE: This declaration is COMPLETE — it is not truncated. It is placed here,
+ * after computeDigest(), on purpose: computeDigest only reads EXT_TO_LANG when
+ * it actually walks the workspace (at call time), by which point this `const`
+ * is fully initialized. Keep this table in sync with CODE_EXTENSIONS above and
+ * with EXT_LANG in server/repoGraph.ts when adding new languages.
+ */
 const EXT_TO_LANG: Record<string, string> = {
   '.ts': 'TypeScript', '.tsx': 'TypeScript',
   '.js': 'JavaScript', '.jsx': 'JavaScript', '.mjs': 'JavaScript', '.cjs': 'JavaScript',

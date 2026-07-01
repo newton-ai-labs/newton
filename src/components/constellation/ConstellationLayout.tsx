@@ -10,6 +10,7 @@ import ConstellationPalette from './ConstellationPalette'
 import { useFirstRun, markOnboarded } from './useFirstRun'
 import { useCodebaseHealth } from './useCodebaseHealth'
 import NodeDetailsPanel from './NodeDetailsPanel'
+import ImpactReportView from './ImpactReportView'
 
 /**
  * Constellation layout — the new Newton shell.
@@ -69,6 +70,8 @@ export default function ConstellationLayout() {
   // When set, the canvas animates to center on this node. Cleared after
   // the canvas reports completion (or when the user takes manual control).
   const [flyTo, setFlyTo] = useState<string | null>(null)
+  // When set, the full-screen Impact Report covers the canvas + drawer.
+  const [reportPath, setReportPath] = useState<string | null>(null)
 
   // First-run state. firstRun captured once on mount (so toggling Settings
   // mid-session doesn't fire the animation twice). hintVisible is a
@@ -228,11 +231,25 @@ export default function ConstellationLayout() {
         {/* Right-side details drawer for the focused node. Single-click on
             a constellation node opens this; the "View in editor" button or
             a double-click on the node opens the Monaco editor. */}
-        {selectedNode && !zoomed && (
+        {selectedNode && !zoomed && !reportPath && (
           <NodeDetailsPanel
             nodeId={selectedNode}
             onClose={() => setSelectedNode(null)}
             onOpenInEditor={(id) => handleOpen(id, focusPos)}
+            onOpenReport={(id) => setReportPath(id)}
+          />
+        )}
+
+        {/* Full-screen Impact Report — covers the canvas/drawer while open.
+            Esc or the Back button returns to the constellation. */}
+        {reportPath && (
+          <ImpactReportView
+            path={reportPath}
+            onClose={() => setReportPath(null)}
+            onOpenInEditor={(p) => {
+              setReportPath(null)
+              handleOpen(p, focusPos)
+            }}
           />
         )}
       </div>

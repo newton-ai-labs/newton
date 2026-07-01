@@ -32,6 +32,8 @@ interface Props {
   onClose: () => void
   /** Open the editor on this file (the existing zoom-into-Monaco flow). */
   onOpenInEditor: (nodeId: string) => void
+  /** Open the full Impact Report for this file. */
+  onOpenReport: (nodeId: string) => void
 }
 
 interface Commit {
@@ -62,7 +64,7 @@ interface FileStats {
 // trusts the server's `cached: true|false` response — no stale-cache bugs
 // when files change between opens.
 
-export default function NodeDetailsPanel({ nodeId, onClose, onOpenInEditor }: Props) {
+export default function NodeDetailsPanel({ nodeId, onClose, onOpenInEditor, onOpenReport }: Props) {
   const { graph } = useGraph()
   const { byPath } = useCodebaseHealth()
   const settings = useStore((s) => s.settings)
@@ -266,15 +268,30 @@ export default function NodeDetailsPanel({ nodeId, onClose, onOpenInEditor }: Pr
         })()}
 
         {/* AI-suggested actions for this file. Click a row to run it as a
-            mission (focuses this file as context, auto-executes). The
-            "cached" badge means the server hit its disk cache (no LLM
-            call billed); absent means a fresh LLM call just ran. */}
+            mission (focuses this file as context, auto-executes).
+            The state pill always shows whether this response came from
+            the server-side cache, so users can always see what's happening
+            (rather than only seeing the badge when cached). */}
         <Section
           title="Suggested actions"
           badge={
-            !suggestionsLoading && suggestions.length > 0 && suggestionsCached
-              ? <span style={cachedBadgeStyle} title="Served from the server-side cache — no LLM call this time">✓ cached</span>
-              : null
+            !suggestionsLoading && suggestions.length > 0 ? (
+              suggestionsCached ? (
+                <span
+                  style={cachedBadgeStyle}
+                  title="Served from the server-side cache — no LLM call this time"
+                >
+                  ✓ cached
+                </span>
+              ) : (
+                <span
+                  style={freshBadgeStyle}
+                  title="Fresh LLM call (file content or model changed since last cache hit)"
+                >
+                  ↗ fresh
+                </span>
+              )
+            ) : null
           }
         >
           {suggestionsLoading && (
@@ -338,8 +355,17 @@ export default function NodeDetailsPanel({ nodeId, onClose, onOpenInEditor }: Pr
       <footer style={footerStyle}>
         <button
           type="button"
+          className="cn-open-report-btn"
+          onClick={() => onOpenReport(nodeId)}
+        >
+          <Sparkles size={13} />
+          <span>Open full Impact Report</span>
+        </button>
+        <button
+          type="button"
           className="cn-open-editor-btn"
           onClick={() => onOpenInEditor(nodeId)}
+          style={{ marginTop: 8 }}
         >
           <ExternalLink size={13} />
           <span>View full file in editor</span>
@@ -562,6 +588,19 @@ const cachedBadgeStyle: React.CSSProperties = {
   borderRadius: 999,
   background: 'color-mix(in srgb, var(--green) 14%, transparent)',
   color: 'var(--green)',
+  textTransform: 'none',
+}
+const freshBadgeStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 3,
+  fontSize: 9.5,
+  fontWeight: 500,
+  letterSpacing: 0.3,
+  padding: '1px 6px',
+  borderRadius: 999,
+  background: 'color-mix(in srgb, var(--accent-2) 14%, transparent)',
+  color: 'var(--accent-2)',
   textTransform: 'none',
 }
 const dlRowStyle: React.CSSProperties = {

@@ -3820,12 +3820,13 @@ to {
   from { transform: translateX(20px); opacity: 0; }
   to   { transform: translateX(0);    opacity: 1; }
 }
-.cn-open-editor-btn {
+.cn-open-report-btn {
   width: 100%;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 9px 12px;
+  padding: 10px 12px;
   border-radius: 7px;
   background: var(--accent-grad, var(--accent));
   border: none;
@@ -3836,8 +3837,35 @@ to {
   font-family: inherit;
   transition: filter 0.12s ease;
 }
-.cn-open-editor-btn:hover {
+.cn-open-report-btn:hover {
   filter: brightness(1.08);
+}
+.cn-open-report-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Secondary action in the drawer footer — sits below the primary
+   "Open Impact Report" button. */
+.cn-open-editor-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 7px;
+  background: transparent;
+  border: 0.5px solid var(--border-soft);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.cn-open-editor-btn:hover {
+  background: var(--panel-2);
+  border-color: var(--border);
 }
 .cn-open-editor-btn:focus-visible {
   outline: 2px solid var(--accent);

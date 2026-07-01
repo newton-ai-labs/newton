@@ -13,6 +13,7 @@ import { demoAnswer, streamDemo, demoEdit } from './demoAi.js'
 import { demoPlan, executeStep, llmPlan } from './agent.js'
 import { getIndex, resetIndex, type SearchHit } from './indexing.js'
 import { getGraphBuilder } from './repoGraph.js'
+import { getImpactIndex } from './impact.js'
 import {
   getOrCreateMemory,
   refreshMemory,
@@ -2759,6 +2760,41 @@ app.get('/api/git/file-stats', async (req, res) => {
   }
 })
 
+/**
+ * Top-N owners of a file by commit count. Used by the Impact Report's right
+ * rail to render the "Owners" panel (avatars + names).
+ *
+ * Returns { name, email, commits } per author. We compute Gravatar URLs
+ * client-side from email — server returns the email so the client can hash.
+ */
+app.get('/api/git/file-owners', async (req, res) => {
+  try {
+    const rel = String(req.query.path ?? '').trim()
+    const limit = Math.min(10, Math.max(1, Number(req.query.limit ?? 3)))
+    if (!rel) return res.status(400).json({ error: 'path required' })
+    safeJoin(rel)
+    // %an = author name, %ae = author email. Format: name<TAB>email per commit.
+    const raw = await git(['log', '--pretty=format:%an\t%ae', '--', rel])
+    if (!raw) return res.json({ owners: [], totalCommits: 0 })
+    const counts = new Map<string, { name: string; email: string; commits: number }>()
+    for (const line of raw.split('\n')) {
+      if (!line) continue
+      const [name, email] = line.split('\t')
+      const key = (email || name).toLowerCase()
+      const cur = counts.get(key)
+      if (cur) cur.commits++
+      else counts.set(key, { name: name || email, email: email || '', commits: 1 })
+    }
+    const owners = [...counts.values()]
+      .sort((a, b) => b.commits - a.commits)
+      .slice(0, limit)
+    const totalCommits = [...counts.values()].reduce((s, o) => s + o.commits, 0)
+    res.json({ owners, totalCommits })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
 app.post('/api/git/init', async (_req, res) => {
   try {
     await git(['init'])
@@ -3126,6 +3162,79 @@ app.get('/api/graph/impact', async (req, res) => {
     }))
 
     res.json({ file, ...result, impacted })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/**
+ * Impact Report tiles — endpoints + DB tables for the focused file.
+ *
+ * - endpoints: HTTP endpoints declared in any of the file's inbound callers
+ *   (i.e. routes whose handlers transitively touch this file). Useful for the
+ *   "What endpoints will this change affect?" tile.
+ * - tables: DB tables referenced by this file OR any of its direct imports.
+ *   Useful for the "What tables does this file touch?" tile.
+ *
+ * Best-effort regex over the workspace; cached in-process with a short TTL.
+ */
+app.get('/api/file/impact', async (req, res) => {
+  try {
+    const file = String(req.query.path ?? '').trim()
+    if (!file) return res.status(400).json({ error: 'path query param required' })
+
+    const builder = getGraphBuilder(WORKSPACE)
+    await builder.build()
+    const graph = builder.getGraph()
+    if (!graph) return res.status(500).json({ error: 'graph unavailable' })
+    if (!graph.nodes[file]) return res.status(404).json({ error: 'file not in graph' })
+
+    const idx = await getImpactIndex(WORKSPACE)
+
+    // Endpoints: collect across the file's inbound callers. The focused file
+    // itself counts too — a route handler can call no one and still be one.
+    const inbound = graph.reverseEdges?.[file] ?? []
+    const endpointSources = new Set<string>([file, ...inbound])
+    const endpointSeen = new Set<string>()
+    const endpoints: Array<{
+      method: string; route: string; file: string; framework: string
+    }> = []
+    for (const src of endpointSources) {
+      const list = idx.endpointsByFile.get(src)
+      if (!list) continue
+      for (const e of list) {
+        const key = `${e.method} ${e.route}`
+        if (endpointSeen.has(key)) continue
+        endpointSeen.add(key)
+        endpoints.push({ method: e.method, route: e.route, file: e.file, framework: e.framework })
+      }
+    }
+
+    // Tables: this file + its 1-hop import set.
+    const directDeps = graph.nodes[file].imports ?? []
+    const tableSources = new Set<string>([file, ...directDeps])
+    const tableSeen = new Set<string>()
+    const tables: Array<{ name: string; kind: string; file: string }> = []
+    for (const src of tableSources) {
+      const list = idx.tablesByFile.get(src)
+      if (!list) continue
+      for (const t of list) {
+        if (tableSeen.has(t.name)) continue
+        tableSeen.add(t.name)
+        tables.push({ name: t.name, kind: t.kind, file: t.file })
+      }
+    }
+
+    res.json({
+      path: file,
+      endpoints,
+      tables,
+      stats: {
+        endpointSources: endpointSources.size,
+        tableSources: tableSources.size,
+        builtAt: idx.builtAt,
+      },
+    })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }
